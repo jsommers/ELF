@@ -1,11 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"github.com/iovisor/gobpf/bcc"
 	"io/ioutil"
 	"log"
@@ -24,7 +24,7 @@ import "C"
 
 var port = 8080
 var host = ""
-var bpfInput = "someta_bpf.c"
+var bpfInput = ""
 var netInterface = ""
 
 func init() {
@@ -32,6 +32,8 @@ func init() {
 	flag.IntVar(&port, "p", 8080, "Set listen port for REST API daemon")
 	flag.StringVar(&host, "host", "", "Host address for REST daemon to listen on")
 	flag.StringVar(&netInterface, "i", "", "Interface name to use")
+	flag.StringVar(&bpfInput, "code", "someta_ebpf.c", "Name of file with eBPF code to use")
+	flag.StringVar(&bpfInput, "c", "someta_ebpf.c", "Name of file with eBPF code to use")
 }
 
 func main() {
@@ -39,17 +41,19 @@ func main() {
 
 	contents, err := ioutil.ReadFile(bpfInput)
 	if err != nil {
-		log.Printf("Couldn't open eBPF file %s\n", bpf_input)
+		log.Printf("Couldn't open eBPF file %s\n", bpfInput)
 		log.Fatal(err)
 	}
 	buf := bytes.NewBuffer(contents)
 	ebpfSource := buf.String()
+	ret := "XDP_DROP"
+	ctxtype := "xdp_md"
 	ebpf := bcc.NewModule(ebpfSource, []string{
 		"-w",
 		"-DRETURNCODE=" + ret,
 		"-DCTXTYPE=" + ctxtype,
 	})
-	defer module.Close()
+	defer ebpf.Close()
 	fn, err := ebpf.Load("xdp_prog1", C.BPF_PROG_TYPE_XDP, 1, 65536)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load xdp prog: %v\n", err)
@@ -64,7 +68,7 @@ func main() {
 
 	defer func() {
 		if err := ebpf.RemoveXDP(netInterface); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to remove XDP from %s: %v\n", device, err)
+			fmt.Fprintf(os.Stderr, "Failed to remove XDP from %s: %v\n", netInterface, err)
 		}
 	}()
 
@@ -111,11 +115,11 @@ func main() {
 
 	<-idleConnsClosed
 
-	dropcnt := bpf.NewTable(module.TableId("dropcnt"), module)
+	dropcnt := bcc.NewTable(ebpf.TableId("dropcnt"), ebpf)
 	fmt.Printf("\n{IP protocol-number}: {total dropped pkts}\n")
 	for it := dropcnt.Iter(); it.Next(); {
-		key := bpf.GetHostByteOrder().Uint32(it.Key())
-		value := bpf.GetHostByteOrder().Uint64(it.Leaf())
+		key := bcc.GetHostByteOrder().Uint32(it.Key())
+		value := bcc.GetHostByteOrder().Uint64(it.Leaf())
 
 		if value > 0 {
 			fmt.Printf("%v: %v pkts\n", key, value)
