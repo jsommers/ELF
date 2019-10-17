@@ -46,7 +46,7 @@ func main() {
 	}
 	buf := bytes.NewBuffer(contents)
 	ebpfSource := buf.String()
-	ret := "XDP_DROP"
+	ret := "XDP_PASS"
 	ctxtype := "xdp_md"
 	ebpf := bcc.NewModule(ebpfSource, []string{
 		"-w",
@@ -71,8 +71,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Failed to remove XDP from %s: %v\n", netInterface, err)
 		}
 	}()
-
-
 
 	var srv http.Server
 	srv.Addr = fmt.Sprintf("%s:%d", host, port)
