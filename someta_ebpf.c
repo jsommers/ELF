@@ -5,16 +5,8 @@
  * jsommers@colgate.edu
  */
 #define KBUILD_MODNAME "foo"
-#include <uapi/linux/bpf.h>
-#include <linux/in.h>
-#include <linux/if_ether.h>
-#include <linux/if_packet.h>
-#include <linux/if_vlan.h>
-#include <linux/ip.h>
-#include <linux/tcp.h>
-#include <linux/icmp.h>
-
 #define BPF_LICENSE GPL
+#include "someta_ebpf.h"
 
 #if ETHER_ENCAP
 #define L2_HLEN ETH_HLEN
@@ -22,21 +14,21 @@
 #define L2_HLEN 0
 #endif
 
-#define IP_TTL_OFF offsetof(struct iphdr, ttl)
-#define IP_SRC_OFF offsetof(struct iphdr, saddr)
-#define IP_DST_OFF offsetof(struct iphdr, daddr)
-#define IP_LEN_OFF offsetof(struct iphdr, tot_len)
-#define IP_CSUM_OFF offsetof(struct iphdr, check)
-#define ICMP_SEQ_OFF offsetof(struct icmphdr, un.echo.sequence)
-#define ICMP_ID_OFF offsetof(struct icmphdr, un.echo.id)
-#define ICMP_CSUM_OFF offsetof(struct icmphdr, checksum)
-#define TCP_SRC_OFF offsetof(struct tcphdr, source)
-#define TCP_DST_OFF offsetof(struct tcphdr, dest)
-#define TCP_SEQ_OFF offsetof(struct tcphdr, seq)
-#define TCP_ACK_OFF offsetof(struct tcphdr, ack_seq)
-#define TCP_URG_OFF offsetof(struct tcphdr, urg_ptr)
-#define TCP_WIN_OFF offsetof(struct tcphdr, window)
-#define TCP_CSUM_OFF offsetof(struct tcphdr, check)
+#define IP_TTL_OFF offsetof(struct _iphdr, ttl)
+#define IP_SRC_OFF offsetof(struct _iphdr, saddr)
+#define IP_DST_OFF offsetof(struct _iphdr, daddr)
+#define IP_LEN_OFF offsetof(struct _iphdr, tot_len)
+#define IP_CSUM_OFF offsetof(struct _iphdr, check)
+#define ICMP_SEQ_OFF offsetof(struct _icmphdr, un.echo.sequence)
+#define ICMP_ID_OFF offsetof(struct _icmphdr, un.echo.id)
+#define ICMP_CSUM_OFF offsetof(struct _icmphdr, checksum)
+#define TCP_SRC_OFF offsetof(struct _tcphdr, source)
+#define TCP_DST_OFF offsetof(struct _tcphdr, dest)
+#define TCP_SEQ_OFF offsetof(struct _tcphdr, seq)
+#define TCP_ACK_OFF offsetof(struct _tcphdr, ack_seq)
+#define TCP_URG_OFF offsetof(struct _tcphdr, urg_ptr)
+#define TCP_WIN_OFF offsetof(struct _tcphdr, window)
+#define TCP_CSUM_OFF offsetof(struct _tcphdr, check)
 
 struct latency_sample {
     u64 seq;
