@@ -6,7 +6,7 @@
 #include <linux/if_vlan.h>
 #include <linux/ip.h>
 #include <linux/ipv6.h>
-BPF_TABLE("array", int, long, dropcnt, 256);
+BPF_TABLE("array", int, long, counters, 256);
 static inline int parse_ipv4(void *data, u64 nh_off, void *data_end) {
     struct iphdr *iph = data + nh_off;
     if ((void*)&iph[1] > data_end)
@@ -57,7 +57,7 @@ int xdp_prog1(struct CTXTYPE *ctx) {
        index = parse_ipv6(data, nh_off, data_end);
     else
         index = 0;
-    value = dropcnt.lookup(&index);
+    value = counters.lookup(&index);
     if (value) lock_xadd(value, 1);
     return rc;
 }

@@ -113,9 +113,9 @@ func main() {
 
 	<-idleConnsClosed
 
-	dropcnt := bcc.NewTable(ebpf.TableId("dropcnt"), ebpf)
-	fmt.Printf("\n{IP protocol-number}: {total dropped pkts}\n")
-	for it := dropcnt.Iter(); it.Next(); {
+	counters := bcc.NewTable(ebpf.TableId("counters"), ebpf)
+	fmt.Printf("\n{IP protocol-number}: {num pkts}\n")
+	for it := counters.Iter(); it.Next(); {
 		key := bcc.GetHostByteOrder().Uint32(it.Key())
 		value := bcc.GetHostByteOrder().Uint64(it.Leaf())
 
