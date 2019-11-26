@@ -30,7 +30,7 @@ class ProbeConfig(object):
         self.status = 1.0
         self.ether = args.noether
         self.outfile = args.outfile
-        self.code = args.code
+        self.code = args.ebpfcode
         self.timeout = int(args.timeout)
         self._sanitycheck()
 
@@ -80,9 +80,9 @@ def main(config):
     iplist = []
     for h in config.hostnames:
         lookup_host(h, iplist)
+    logging.info("Tracing hosts: ", ','.join([str(i) for i in iplist]))
     if config.maxttl > 0:
         numhops = config.maxttl
-    logging.info("{} is {} hops away".format(config.host, numhops))
 
     debugflag = 0     
     if config.debug:
@@ -92,9 +92,20 @@ def main(config):
     cflags += config.cflags()
 
     ibpf = bcc.BPF(src_file=config.code, debug=debugflag, cflags=cflags)
+
+    # set up ingress path
     ingress_fn = ibpf.load_func("ingress_path", bcc.BPF.XDP)
-    egress_fn = ibpf.load_func('egress_path'.format(config.mode), bcc.BPF.SCHED_CLS)
     ibpf.attach_xdp(config.device, ingress_fn)
+    iprog_array = ibpf.get_table("ingress_prog_array")
+    icmp_ingress = ibpf.load_func("ingress_path_icmp", bcc.BPF.XDP)
+    tcp_ingress = ibpf.load_func("ingress_path_tcp", bcc.BPF.XDP)
+    udp_ingress = ibpf.load_func("ingress_path_udp", bcc.BPF.XDP)
+    iprog_array[c_int(1)] = c_int(icmp_ingress.fd)
+    iprog_array[c_int(6)] = c_int(tcp_ingress.fd)
+    iprog_array[c_int(17)] = c_int(udp_ingress.fd)
+
+    egress_fn = ibpf.load_func('egress_path'.format(config.mode), bcc.BPF.SCHED_CLS)
+
 
     try:
         ip.tc('del', 'clsact', idx)
@@ -106,10 +117,12 @@ def main(config):
             parent='ffff:fff3', classid=1, direct_action=True)
 
     # register the ipaddress of interest
-    ibpf['ip4_interest'].clear()
+    ibpf['ip_interest'].clear()
+    key = 0
     for ipstr, taddr in iplist:
         logging.info("Adding {} to ip interest hash".format(ipstr))
-        ibpf['ip4_interest'][ctypes.c_ulong(socket.htonl(taddr))] = ctypes.c_bool(1)
+        ibpf['ip_interest'][ctypes.c_ulong(socket.htonl(taddr))] = ctypes.c_ulonglong(key)
+        key += 1
 
     logging.info("Installed ebpf code;{} ctrl+c to interrupt".format(running))
 
@@ -195,7 +208,7 @@ def main(config):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('In-band measurement')
-    parser.add_argument('-c', default='someta_ebpf.c',
+    parser.add_argument('-c', '--ebpfcode', default='someta_ebpf.c',
                         help='File containing eBPF code to install')
     parser.add_argument('-d', '--debug', 
                         action='store_true', default=False,

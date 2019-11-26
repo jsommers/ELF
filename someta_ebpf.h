@@ -2,6 +2,8 @@
 // why?  to avoid dependencies on kernel headers and
 // any other sub-#includes.
 
+#define ETH_ALEN        6
+
 typedef uint32_t _in_addr_t;
 typedef struct {
     union {
@@ -10,15 +12,23 @@ typedef struct {
         uint32_t __u6_addr32[4];
     } __in6_u;
 } _in6_addr_t;
-    
+
+struct _ethhdr
+{
+  uint8_t  ether_dhost[ETH_ALEN];       /* destination eth addr */
+  uint8_t  ether_shost[ETH_ALEN];       /* source ether addr    */
+  uint16_t ether_type;                  /* packet type ID field */
+} __attribute__ ((__packed__));
+
 struct _iphdr {
 #if __BYTE_ORDER == __LITTLE_ENDIAN
     unsigned int ihl:4;
     unsigned int version:4;
-#elif __BYTE_ORDER == __BIG_ENDIAN
+#endif
+#if __BYTE_ORDER == __BIG_ENDIAN
     unsigned int version:4;
     unsigned int ihl:4;
-#else
+#endif
     uint8_t tos;
     uint16_t tot_len;
     uint16_t id;
@@ -42,8 +52,8 @@ struct ip6_hdr {
         } ip6_un1;
         uint8_t ip6_un2_vfc;       /* 4 bits version, top 4 bits tclass */
     } ip6_ctlun;
-    struct _in6_addr_t ip6_src;      /* source address */
-    struct _in6_addr_t ip6_dst;      /* destination address */
+    _in6_addr_t ip6_src;      /* source address */
+    _in6_addr_t ip6_dst;      /* destination address */
 };
 
 struct _udphdr {
@@ -83,6 +93,13 @@ struct _icmphdr {
     uint8_t     icmp_code;   /* code field */
     uint16_t    icmp_cksum;  /* checksum field */
 };
+
+#define IPPROTO_ICMP    1
+#define IPPROTO_TCP     6
+#define IPPROTO_UDP     17
+
+#define ETHERTYPE_IP        0x0800
+#define ETHERTYPE_IP6       0x86dd 
 
 #define ICMP6_DST_UNREACH             1
 #define ICMP6_TIME_EXCEEDED           3
