@@ -126,6 +126,7 @@ int egress_path(struct __sk_buff *ctx) {
 
     uint8_t proto = iphdr->protocol;
     egress_prog_array.call(ctx, proto);
+    xdebug.increment(114);
 
     // no-op for now
     return TC_ACT_OK;
