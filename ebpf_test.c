@@ -49,7 +49,7 @@ BPF_HISTOGRAM(xdebug, u64, 64);
 #endif
 
 
-static inline int _is_packet_of_interest(void *data, void *data_end, int *offset, struct _iphdr **iph, u64 *key) {
+static inline int _is_packet_of_interest(void *data, void *data_end, int *offset, struct _iphdr **iph, u64 *key, int chkdst) {
 #if ETHER_ENCAP
     if (data + sizeof(struct _ethhdr)  > data_end) {
         return 0;
@@ -69,9 +69,14 @@ static inline int _is_packet_of_interest(void *data, void *data_end, int *offset
     }
 
     *iph = data + *offset;
-    u32 dstip = (*iph)->daddr;
+    u32 chkip = 0;
+    if (chkdst) {
+        chkip = (*iph)->daddr;
+    } else {
+        chkip = (*iph)->saddr;
+    }
     u64 *xkey = NULL;
-    if (NULL == (xkey = ip_interest.lookup(&dstip))) {
+    if (NULL == (xkey = ip_interest.lookup(&chkip))) {
         return 0;
     }
     *key = *xkey;
@@ -117,7 +122,7 @@ int egress_path(struct __sk_buff *ctx) {
 #if DEBUG
     xdebug.increment(100);
 #endif
-    if (!_is_packet_of_interest(data, data_end, &offset, &iphdr, &key)) {
+    if (!_is_packet_of_interest(data, data_end, &offset, &iphdr, &key, 1)) {
         return TC_ACT_OK;
     }
 #if DEBUG
@@ -169,7 +174,8 @@ int ingress_path(struct xdp_md *ctx) {
 #if DEBUG
     xdebug.increment(0);
 #endif
-    if (!_is_packet_of_interest(data, data_end, &offset, &iphdr, &key)) {
+    if (!_is_packet_of_interest(data, data_end, &offset, &iphdr, &key, 0)) {
+        xdebug.increment(12);
         return XDP_PASS;
     }
 #if DEBUG
@@ -177,6 +183,8 @@ int ingress_path(struct xdp_md *ctx) {
 #endif
 
     uint8_t proto = iphdr->protocol;
+    xdebug.increment(50+proto);
     ingress_prog_array.call(ctx, proto);
+    xdebug.increment(14);
     return XDP_PASS;
 }
