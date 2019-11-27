@@ -100,11 +100,11 @@ def main(config):
     icmp_ingress = ibpf.load_func("ingress_path_icmp", bcc.BPF.XDP)
     tcp_ingress = ibpf.load_func("ingress_path_tcp", bcc.BPF.XDP)
     udp_ingress = ibpf.load_func("ingress_path_udp", bcc.BPF.XDP)
-    iprog_array[c_int(1)] = c_int(icmp_ingress.fd)
-    iprog_array[c_int(6)] = c_int(tcp_ingress.fd)
-    iprog_array[c_int(17)] = c_int(udp_ingress.fd)
+    iprog_array[ctypes.c_int(1)] = ctypes.c_int(icmp_ingress.fd)
+    iprog_array[ctypes.c_int(6)] = ctypes.c_int(tcp_ingress.fd)
+    iprog_array[ctypes.c_int(17)] = ctypes.c_int(udp_ingress.fd)
 
-    egress_fn = ibpf.load_func('egress_path'.format(config.mode), bcc.BPF.SCHED_CLS)
+    egress_fn = ibpf.load_func('egress_path', bcc.BPF.SCHED_CLS)
 
 
     try:
@@ -124,11 +124,11 @@ def main(config):
         ibpf['ip_interest'][ctypes.c_ulong(socket.htonl(taddr))] = ctypes.c_ulonglong(key)
         key += 1
 
-    logging.info("Installed ebpf code;{} ctrl+c to interrupt".format(running))
+    logging.info("Installed ebpf code; ctrl+c to interrupt")
 
     outfile = open(config.outfile + ".csv", 'wb')
     csvwriter = csv.writer(outfile)
-    csvwriter.writerow(['seq','origseq','latency','send','recv','outttl','recvttl','sport','dport','target','responder'])
+    # csvwriter.writerow([bytes(x, encoding='utf-8') for x in ['seq','origseq','latency','send','recv','outttl','recvttl','sport','dport','target','responder']])
 
     def _print_status():
         try:
@@ -155,6 +155,10 @@ def main(config):
             if now - laststatus > config.status:
                 _print_status()
                 laststatus = now
+
+            print("debug table")
+            for k,v in ibpf['xdebug'].items():
+                print("{}: {}".format(k, v.value))
 
             if config.timeout > 0 and now > start + config.timeout:
                 logging.info("external program timeout exceeded")

@@ -66,8 +66,8 @@ struct _udphdr {
 struct _tcphdr {
     uint16_t th_sport;      /* source port */
     uint16_t th_dport;      /* destination port */
-    tcp_seq th_seq;         /* sequence number */
-    tcp_seq th_ack;         /* acknowledgement number */
+    uint32_t th_seq;         /* sequence number */
+    uint32_t th_ack;         /* acknowledgement number */
 # if __BYTE_ORDER == __LITTLE_ENDIAN
     uint8_t th_x2:4;        /* (unused) */
     uint8_t th_off:4;       /* data offset */
