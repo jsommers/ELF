@@ -93,9 +93,9 @@ def main(config):
 
     ibpf = bcc.BPF(src_file=config.code, debug=debugflag, cflags=cflags)
 
-    # set up ingress path
+    # FIXME: ugly as hell; generalize me
+    # setup ingress path
     ingress_fn = ibpf.load_func("ingress_path", bcc.BPF.XDP)
-    ibpf.attach_xdp(config.device, ingress_fn)
     iprog_array = ibpf.get_table("ingress_prog_array")
     icmp_ingress = ibpf.load_func("ingress_path_icmp", bcc.BPF.XDP)
     tcp_ingress = ibpf.load_func("ingress_path_tcp", bcc.BPF.XDP)
@@ -103,8 +103,17 @@ def main(config):
     iprog_array[ctypes.c_int(1)] = ctypes.c_int(icmp_ingress.fd)
     iprog_array[ctypes.c_int(6)] = ctypes.c_int(tcp_ingress.fd)
     iprog_array[ctypes.c_int(17)] = ctypes.c_int(udp_ingress.fd)
+    ibpf.attach_xdp(config.device, ingress_fn)
 
+    # setup egress path
     egress_fn = ibpf.load_func('egress_path', bcc.BPF.SCHED_CLS)
+    eprog_array = ibpf.get_table("egress_prog_array")
+    icmp_egress = ibpf.load_func("egress_path_icmp", bcc.BPF.SCHED_CLS)
+    tcp_egress = ibpf.load_func("egress_path_tcp", bcc.BPF.SCHED_CLS)
+    udp_egress = ibpf.load_func("egress_path_udp", bcc.BPF.SCHED_CLS)
+    eprog_array[ctypes.c_int(1)] = ctypes.c_int(icmp_egress.fd)
+    eprog_array[ctypes.c_int(6)] = ctypes.c_int(tcp_egress.fd)
+    eprog_array[ctypes.c_int(17)] = ctypes.c_int(udp_egress.fd)
 
 
     try:
