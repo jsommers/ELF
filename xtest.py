@@ -1,9 +1,10 @@
 import time
 from bcc import BPF
+import ctypes
 
 b = BPF(text='''
 typedef struct _in6_addr {
-    u32 addr[4];
+    u32 a, b, c, d;
 } _in6_addr_t;
 
 BPF_LPM_TRIE(trie, _in6_addr_t, u64);
@@ -27,7 +28,15 @@ print('counters')
 for k,v in b['counters'].items():
     print(k,v)
 
+class IN6Addr(ctypes.Structure):
+    _fields_ = [("a", ctypes.c_uint),
+                ("b", ctypes.c_uint),
+                ("c", ctypes.c_uint),
+                ("d", ctypes.c_uint)]
+
+
 print('trie')
 for k,v in b['trie'].items():
+    v = IN6Addr(v)
     print(k,v)
 b.remove_xdp(DEVICE)
