@@ -1,30 +1,28 @@
 import time
-import bcc
+from bcc import BPF
 
-b = bcc.BPF(text='''
-typedef struct {
-    union {
-        uint8_t __u6_addr8[16];
-        uint16_t __u6_addr16[8];
-        uint32_t __u6_addr32[4];
-    } __in6_u;
+b = BPF(text='''
+typedef struct _in6_addr {
+    u32 addr[4];
 } _in6_addr_t;
 
-BPF_LPM_TRIE("trie", _in6_addr_t);
-BPF_HISTOGRAM("counters", int, 10);
+BPF_LPM_TRIE(trie, _in6_addr_t, u64);
+BPF_HISTOGRAM(counters, u64, 16);
 
 int xdp_call(void *ctx) {
-    bpf_trace_printk("Original program\n");
     counters.increment(0); 
-    return 0;
+    _in6_addr_t x = {1, 2, 3, 4};
+    u64 thirteen = 13;
+    trie.lookup_or_init(&x, &thirteen);
+    return XDP_PASS;
 }
-'''
+''')
 
-DEVICE='eth0'
+DEVICE='eno2'
 xdp_fn = b.load_func("xdp_call", BPF.XDP)
 b.attach_xdp(DEVICE, xdp_fn, 0)
 
-time.sleep(1)
+time.sleep(2)
 print('counters')
 for k,v in b['counters'].items():
     print(k,v)
