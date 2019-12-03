@@ -37,7 +37,7 @@ struct latency_sample {
 BPF_PROG_ARRAY(ingress_prog_array, 255);
 BPF_PROG_ARRAY(egress_prog_array, 255);
 
-BPF_HASH(ip_interest, u32);   // should/could be BPF_LPM_TRIE
+BPF_LPM_TRIE(ip_interest, _in6_addr_t);   
 BPF_ARRAY(lastprobe, u64, (NUM_HOPS+1));
 BPF_HISTOGRAM(vars, u64, NUM_VARS);
 BPF_HASH(seqsend);
@@ -49,34 +49,49 @@ BPF_HISTOGRAM(xdebug, u64, 64);
 #endif
 
 
-static inline int _is_packet_of_interest(void *data, void *data_end, int *offset, struct _iphdr **iph, u64 *key, int chkdst) {
+static inline int _is_packet_of_interest(void *data, void *data_end, int *offset, u8 *proto, u64 *key, int chkdst) {
 #if ETHER_ENCAP
     if (data + sizeof(struct _ethhdr)  > data_end) {
         return 0;
     }
 
     struct _ethhdr *eth = data;
-    if (eth->ether_type != htons(ETHERTYPE_IP)) {
+    if (eth->ether_type != htons(ETHERTYPE_IP) && eth->ether_type != htons(ETHERTYPE_IP6)) {
         return 0;
     }
 #endif // ETHER_ENCAP
     *offset = L2_HLEN;
 
-    // FIXME: ip6
+    u32 ipa[4] = {0,0,0,0};
+    int l3_size = sizeof(struct _iphdr); 
+    if (eth->ether_type == htons(ETHERTYPE_IP6)) {
+        l3_size = sizeof(struct _ip6hdr);
+    }
 
-    if (data + *offset + sizeof(struct _iphdr) > data_end) {
+    if (data + *offset + l3_size > data_end) {
         return 0;
     }
 
-    *iph = data + *offset;
-    u32 chkip = 0;
-    if (chkdst) {
-        chkip = (*iph)->daddr;
+    if (eth->ether_type == htons(ETHERTYPE_IP)) {
+        struct _iphdr *iph = data + *offset;
+        if (chkdst) {
+            ipa[0] = iph->daddr;
+        } else {
+            ipa[0] = iph->saddr;
+        }
+        *proto = iph->protocol;
     } else {
-        chkip = (*iph)->saddr;
+        struct _ip6hdr *iph = data + *offset;
+        if (chkdst) {
+            ipa[0] = iph->daddr;
+        } else {
+            ipa[0] = iph->saddr;
+        }
+        *proto = iph->ip6_un1_nxt;
     }
+
     u64 *xkey = NULL;
-    if (NULL == (xkey = ip_interest.lookup(&chkip))) {
+    if (NULL == (xkey = ip_interest.lookup(&ipa))) {
         return 0;
     }
     *key = *xkey;

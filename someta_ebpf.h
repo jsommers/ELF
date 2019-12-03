@@ -41,19 +41,14 @@ struct _iphdr {
     /*The options start here. */
 };
     
-struct ip6_hdr {
-    union {
-        struct ip6_hdrctl {
-            uint32_t ip6_un1_flow;   /* 4 bits version, 8 bits TC,
-                                        20 bits flow-ID */
-            uint16_t ip6_un1_plen;   /* payload length */
-            uint8_t  ip6_un1_nxt;    /* next header */
-            uint8_t  ip6_un1_hlim;   /* hop limit */
-        } ip6_un1;
-        uint8_t ip6_un2_vfc;       /* 4 bits version, top 4 bits tclass */
-    } ip6_ctlun;
-    _in6_addr_t ip6_src;      /* source address */
-    _in6_addr_t ip6_dst;      /* destination address */
+struct ip6hdr {
+    uint32_t ip6_un1_flow;  /* 4 bits version, 8 bits TC,
+                               20 bits flow-ID */
+    uint16_t ip6_un1_plen;  /* payload length */
+    uint8_t  ip6_un1_nxt;   /* next header */
+    uint8_t  ip6_un1_hlim;  /* hop limit */
+    _in6_addr_t saddr;      /* source address */
+    _in6_addr_t daddr;      /* destination address */
 };
 
 struct _udphdr {
