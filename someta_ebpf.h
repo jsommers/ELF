@@ -5,7 +5,7 @@
 #define ETH_ALEN        6
 
 typedef uint32_t _in_addr_t;
-typedef struct {
+typedef struct in6_addr {
     union {
         uint8_t __u6_addr8[16];
         uint16_t __u6_addr16[8];
@@ -13,8 +13,7 @@ typedef struct {
     } __in6_u;
 } _in6_addr_t;
 
-struct _ethhdr
-{
+struct _ethhdr {
   uint8_t  ether_dhost[ETH_ALEN];       /* destination eth addr */
   uint8_t  ether_shost[ETH_ALEN];       /* source ether addr    */
   uint16_t ether_type;                  /* packet type ID field */
@@ -41,7 +40,7 @@ struct _iphdr {
     /*The options start here. */
 };
     
-struct ip6hdr {
+struct _ip6hdr {
     uint32_t ip6_un1_flow;  /* 4 bits version, 8 bits TC,
                                20 bits flow-ID */
     uint16_t ip6_un1_plen;  /* payload length */
