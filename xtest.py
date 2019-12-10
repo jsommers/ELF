@@ -110,8 +110,41 @@ struct _icmphdr {
 #define ICMP_ECHO               8       /* Echo Request                 */
 #define ICMP_TIME_EXCEEDED      11      /* Time Exceeded                */
 
-BPF_HASH(trie, _in6_addr_t, u64);
-BPF_HISTOGRAM(counters, u64, 255);
+#define MAXDEST     128
+
+struct probe_dest {
+    u64     hop_bitmap;
+    u32     sequence;
+    u16     next_hop_to_probe;
+    u16     max_ttl;
+    u64     last_send;
+};
+
+struct sent_info {
+    u64         send_time;
+    _in6_addr_t dest;
+    u64         out_ttl;
+};
+
+struct latency_sample {
+    u64 sequence;
+    u64 origseq;
+    u64 send;
+    u64 recv;
+    u16 sport;
+    u16 dport;
+    u32 responder;
+    u32 target;
+    u8 outttl;
+    u8 recvttl;
+};
+
+BPF_HASH(trie, _in6_addr_t, u64); // key: dest address
+BPF_HISTOGRAM(counters, u64, 255); 
+BPF_ARRAY(destinfo, struct probe_dest, MAXDEST); // index: value in trie hash
+BPF_HASH(hopinfo, u64, u64); // key: destid | hop
+BPF_HASH(sentinfo, u64, struct sent_info); // key: destid | sequence
+BPF_ARRAY(results, struct latency_sample); // key: index 0 in counters
 
 int xdp_call(struct xdp_md *ctx) {
     void* data = (void*)(long)ctx->data;
@@ -136,7 +169,6 @@ int xdp_call(struct xdp_md *ctx) {
     }
 #endif
 
-    counters.increment(0);
     if (ipproto == 4) {
         if (data + offset + sizeof(struct _iphdr) > data_end) {
             return XDP_PASS;
@@ -152,12 +184,11 @@ int xdp_call(struct xdp_md *ctx) {
             *val = *val + 1;
         }
     } else if (ipproto == 6) {
-        counters.increment(101); 
         if (data + offset + sizeof(struct _ip6hdr) > data_end) {
             return XDP_PASS;
         }
         struct _ip6hdr *iph = (struct _ip6hdr*)(data + offset);
-        counters.increment(102); 
+        counters.increment(iph->ip6_un1_nxt);
         _in6_addr_t source;
 #pragma unroll
         for (int i = 0; i < 16; i++) {
