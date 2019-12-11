@@ -3,7 +3,11 @@ from bcc import BPF
 import ctypes
 import ipaddress
 
-b = BPF(src_file="someta_ebpf.c", cflags=['-DTUNNEL=6', '-DNHOFFSET=20'])
+#b = BPF(src_file="someta_ebpf.c", cflags=['-DTUNNEL=6', '-DNHOFFSET=20', '-DDEBUG'])
+#DEVICE='he-ipv6'
+
+b = BPF(src_file="someta_ebpf.c", cflags=['-DDEBUG', '-DNHOFFSET=14'])
+DEVICE='eno2'
 
 class _u(ctypes.Union):
     _fields_ = [
@@ -16,7 +20,6 @@ class in6_addr(ctypes.Structure):
     _fields_ = [('_u', _u)]
 
 
-DEVICE='he-ipv6'
 
 # how to inject something into the table
 table = b['trie']
@@ -36,7 +39,7 @@ for i in range(len(pstr)):
     xaddr._u._addr8[i] = pstr[i]
 table[xaddr] = ctypes.c_uint64(17)
 
-xdp_fn = b.load_func("xdp_call", BPF.XDP)
+xdp_fn = b.load_func("ingress_path", BPF.XDP)
 b.attach_xdp(DEVICE, xdp_fn, 0)
 
 print("start")

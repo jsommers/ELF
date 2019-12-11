@@ -47,9 +47,9 @@ struct _iphdr {
 struct _ip6hdr {
     uint32_t ip6_un1_flow;  /* 4 bits version, 8 bits TC,
                                20 bits flow-ID */
-    uint16_t ip6_un1_plen;  /* payload length */
-    uint8_t  ip6_un1_nxt;   /* next header */
-    uint8_t  ip6_un1_hlim;  /* hop limit */
+    uint16_t payload_length;/* payload length */
+    uint8_t  protocol;      /* next header */
+    uint8_t  hop_limit;     /* hop limit */
     _in6_addr_t saddr;      /* source address */
     _in6_addr_t daddr;      /* destination address */
 };
@@ -95,6 +95,7 @@ struct _icmphdr {
 #define IPPROTO_ICMP    1
 #define IPPROTO_TCP     6
 #define IPPROTO_UDP     17
+#define IPPROTO_ICMP6   58
 
 #define ETHERTYPE_IP        0x0800
 #define ETHERTYPE_IP6       0x86dd 
@@ -108,6 +109,11 @@ struct _icmphdr {
 #define ICMP_DEST_UNREACH       3       /* Destination Unreachable      */
 #define ICMP_ECHO               8       /* Echo Request                 */
 #define ICMP_TIME_EXCEEDED      11      /* Time Exceeded                */
+
+#ifndef TC_ACT_OK
+#define TC_ACT_OK       0
+#define TC_ACT_SHOT     2
+#endif
 
 #define MAXDEST     128
 
@@ -138,6 +144,9 @@ struct latency_sample {
     u8 recvttl;
 };
 
+BPF_PROG_ARRAY(ingress_prog_array, 255);
+BPF_PROG_ARRAY(egress_prog_array, 255);
+
 BPF_HASH(trie, _in6_addr_t, u64); // key: dest address
 BPF_HISTOGRAM(counters, u64, 255); 
 BPF_ARRAY(destinfo, struct probe_dest, MAXDEST); // index: value in trie hash
@@ -145,7 +154,32 @@ BPF_HASH(hopinfo, u64, u64); // key: destid | hop
 BPF_HASH(sentinfo, u64, struct sent_info); // key: destid | sequence
 BPF_ARRAY(results, struct latency_sample); // key: index 0 in counters
 
-int xdp_call(struct xdp_md *ctx) {
+static inline void _update_maxttl(int idx, int ttl) {
+    struct probe_dest *pd = destinfo.lookup(&idx);
+    if (pd == NULL) {
+        return;
+    }
+    int num_hops = 16; 
+    if (ttl > 128) {
+        num_hops = 255 - ttl + 1;
+    } else if (ttl > 64) {
+        num_hops = 128 - ttl + 1;
+    } else if (ttl > 32) {
+        num_hops = 64 - ttl + 1;
+    } else {
+        num_hops = 32 - ttl + 1;
+    }
+#ifdef DEBUG
+        bpf_trace_printk("updated maxttl to %d\n", num_hops);
+#endif
+    pd->max_ttl = num_hops;
+}
+
+int egress_path(struct __sk_buff *ctx) {
+    return TC_ACT_OK; 
+}
+
+int ingress_path(struct xdp_md *ctx) {
     void* data = (void*)(long)ctx->data;
     void* data_end = (void*)(long)ctx->data_end;
 
@@ -173,36 +207,64 @@ int xdp_call(struct xdp_md *ctx) {
             return XDP_PASS;
         }
         struct _iphdr *iph = (struct _iphdr*)(data + offset);
-        counters.increment(iph->protocol); 
+
         _in6_addr_t source = { iph->saddr, 0, 0, 0 };
         u64 *val = NULL;
-        if ((val = trie.lookup(&source)) == NULL) {
-            u64 newval = 1;
-            trie.insert(&source, &newval);
-        } else {
-            *val = *val + 1;
+        if ((val = trie.lookup(&source)) != NULL) {
+            // source address matches a destination of interest.
+            // update our estimate of maxttl for this destination, but
+            // that's it.
+            int idx = (int)*val;
+            _update_maxttl(idx, iph->ttl);
+            return XDP_PASS;
+        } 
+        counters.increment(iph->protocol); 
+        // if packet is an ICMP6 time exceeded response, then
+        // peel out inner packet and check if it is a probe response
+        if (iph->protocol == IPPROTO_ICMP) {
+#ifdef DEBUG
+            bpf_trace_printk("ICMP4 pkt from 0x%lx\n", ntohl(iph->saddr));
+#endif
+            // compute hdr size + shift ahead
+            offset = offset + (iph->ihl << 2);
+            if (data + offset + sizeof(struct _icmphdr) > data_end) {
+                return XDP_PASS;
+            }
+            struct _icmphdr *icmp = (struct _icmphdr*)(data + offset);
+
         }
     } else if (ipproto == 6) {
         if (data + offset + sizeof(struct _ip6hdr) > data_end) {
             return XDP_PASS;
         }
         struct _ip6hdr *iph = (struct _ip6hdr*)(data + offset);
-        counters.increment(iph->ip6_un1_nxt);
-        _in6_addr_t source;
-#pragma unroll
-        for (int i = 0; i < 16; i++) {
-            source._u._addr8[i] = iph->saddr._u._addr8[i];
-        }
+        _in6_addr_t source = iph->saddr;
         u64 *val = NULL;
-        if ((val = trie.lookup(&source)) == NULL) {
-            u64 newval = 1;
-            trie.insert(&source, &newval);
-        } else {
-            *val = *val + 1;
+        if ((val = trie.lookup(&source)) != NULL) {
+            // source address matches a destination of interest.
+            // update our estimate of maxttl for this destination, but
+            // that's it.
+            int idx = (int)*val;
+            _update_maxttl(idx, iph->hop_limit);
+            return XDP_PASS;
+        } 
+        counters.increment(iph->protocol);
+        // if packet is an ICMP6 time exceeded response, then
+        // peel out inner packet and check if it is a probe response
+        if (iph->protocol == IPPROTO_ICMP6) {
+#ifdef DEBUG
+            bpf_trace_printk("ICMP6 pkt from %lx:%lx:", ntohl(source._u._addr32[0]), ntohl(source._u._addr32[1]));
+            bpf_trace_printk("%lx:%lx\n", ntohl(source._u._addr32[2]), ntohl(source._u._addr32[3]));
+#endif
+            offset = offset + sizeof(struct _ip6hdr);
+            if (data + offset + sizeof(struct _icmphdr) > data_end) {
+                return XDP_PASS;
+            }
+            struct _icmphdr *icmp = (struct _icmphdr*)(data + offset);
+
+
         }
-    } else {
-        return XDP_PASS;
-    }
+    } 
 
     return XDP_PASS;
 }

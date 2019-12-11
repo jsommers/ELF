@@ -30,7 +30,6 @@ class ProbeConfig(object):
         self.status = 1.0
         self.ether = args.noether
         self.outfile = args.outfile
-        self.code = args.ebpfcode
         self.timeout = int(args.timeout)
         self._sanitycheck()
 
@@ -39,8 +38,6 @@ class ProbeConfig(object):
             raise InvalidConfiguation("fail: interval is less than 10 microsec")
         if self.device is None:
             raise InvalidConfiguation("Need a device")
-        if not self.code:
-            raise InvalidConfiguration("No eBPF code file specified")
         if not self.hostnames:
             raise InvalidConfiguration("No hosts specified for tracing")
         if self.maxttl < 1 or self.maxttl > 64:
@@ -91,7 +88,7 @@ def main(config):
     cflags=["-Wall", "-DIFINDEX={}".format(idx), "-DNUM_HOPS={}".format(numhops-1)]
     cflags += config.cflags()
 
-    ibpf = bcc.BPF(src_file=config.code, debug=debugflag, cflags=cflags)
+    ibpf = bcc.BPF(src_file='someta_ebpf.c', debug=debugflag, cflags=cflags)
 
     # FIXME: ugly as hell; generalize me
     # setup ingress path
@@ -221,8 +218,6 @@ def main(config):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('In-band measurement')
-    parser.add_argument('-c', '--ebpfcode', default='someta_ebpf.c',
-                        help='File containing eBPF code to install')
     parser.add_argument('-d', '--debug', 
                         action='store_true', default=False,
                         help="Turning on some debugging output (incl. bpf_trace_printk messages")
