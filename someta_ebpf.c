@@ -231,6 +231,9 @@ int ingress_path(struct xdp_md *ctx) {
                 return XDP_PASS;
             }
             struct _icmphdr *icmp = (struct _icmphdr*)(data + offset);
+            if (icmp->icmp_type == ICMP_TIME_EXCEEDED) {
+
+            }
 
         }
     } else if (ipproto == 6) {
@@ -261,6 +264,9 @@ int ingress_path(struct xdp_md *ctx) {
                 return XDP_PASS;
             }
             struct _icmphdr *icmp = (struct _icmphdr*)(data + offset);
+            if (icmp->icmp_type == ICMP6_TIME_EXCEEDED) {
+
+            }
 
 
         }
