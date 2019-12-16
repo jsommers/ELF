@@ -2,6 +2,7 @@
  * FIXME: header for this file
  */
 
+#define BPF_LICENSE GPL
 
 // largely copies of linux header definitions.
 // why?  to avoid any #includes and kernel dependencies
@@ -232,6 +233,35 @@ int ingress_path(struct xdp_md *ctx) {
             }
             struct _icmphdr *icmp = (struct _icmphdr*)(data + offset);
             if (icmp->icmp_type == ICMP_TIME_EXCEEDED) {
+
+                // FIXME: not doing this yet, but can use this len to determine
+                // whether there are any extension headers a la rfc4884 
+                // (and rfc4950 extensions in particular)
+                int inner_pktlen = icmph->un.reserved[1];
+                if (inner_pktlen == 0) {
+                    inner_pktlen = 28;
+                }
+
+                offset = offset + sizeof(struct icmphdr);
+                // save srcip and ttl from outer IP header
+                uint32_t srcip = iph->saddr;
+                uint8_t recvttl = iph->ttl;
+                if (data + offset + sizeof(struct iphdr) > data_end) {
+                    return XDP_PASS;
+                }
+
+                // the *inner* v4 header returned by some router where the packet died
+                iph = (struct iphdr*)(data + offset);
+                u32 origdst = iph->daddr;
+
+                if (NULL == ip4_interest.lookup(&origdst)) {
+                    return XDP_PASS;
+                }
+
+            #if DEBUG
+                bpf_trace_printk("INGRESS ttl exc from 0x%x rttl %d\n", srcip, recvttl);
+            #endif
+
 
             }
 
