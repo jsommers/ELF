@@ -25,14 +25,7 @@ struct _ethhdr {
 } __attribute__ ((__packed__));
 
 struct _iphdr {
-#if __BYTE_ORDER == __LITTLE_ENDIAN
-    unsigned int ihl:4;
-    unsigned int version:4;
-#endif
-#if __BYTE_ORDER == __BIG_ENDIAN
-    unsigned int version:4;
-    unsigned int ihl:4;
-#endif
+    uint8_t verihl;
     uint8_t tos;
     uint16_t tot_len;
     uint16_t id;
@@ -224,18 +217,18 @@ int ingress_path(struct xdp_md *ctx) {
         // if packet is an ICMP6 time exceeded response, then
         // peel out inner packet and check if it is a probe response
         if (iph->protocol == IPPROTO_ICMP) {
-#ifdef DEBUG
-            bpf_trace_printk("ICMP4 pkt from 0x%lx\n", ntohl(iph->saddr));
-#endif
             // compute hdr size + shift ahead
-            offset = offset + (iph->ihl << 2);
+            offset = offset + ((iph->verihl&0x0f) << 2);
+#ifdef DEBUG
+            bpf_trace_printk("ICMP4 pkt from 0x%lx hsize %d\n", ntohl(iph->saddr), ((iph->verihl&0x0f) << 2));
+#endif
             if (data + offset + sizeof(struct _icmphdr) > data_end) {
                 return XDP_PASS;
             }
             struct _icmphdr *icmp = (struct _icmphdr*)(data + offset);
             if (icmp->icmp_type == ICMP_TIME_EXCEEDED) {
 #ifdef DEBUG
-            bpf_trace_printk("icmp time exceeded from 0x%lx\n", ntohl(iph->saddr));
+                bpf_trace_printk("icmp time exceeded from 0x%lx\n", ntohl(iph->saddr));
 #endif
 
                 // FIXME: not doing this yet, but can use this len to determine
