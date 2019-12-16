@@ -91,6 +91,7 @@ struct _icmphdr {
     uint8_t     icmp_type;   /* type field */
     uint8_t     icmp_code;   /* code field */
     uint16_t    icmp_cksum;  /* checksum field */
+    uint8_t     reserved[4]; /* 4 bytes reserved */
 };
 
 #define IPPROTO_ICMP    1
@@ -233,28 +234,33 @@ int ingress_path(struct xdp_md *ctx) {
             }
             struct _icmphdr *icmp = (struct _icmphdr*)(data + offset);
             if (icmp->icmp_type == ICMP_TIME_EXCEEDED) {
+#ifdef DEBUG
+            bpf_trace_printk("icmp time exceeded from 0x%lx\n", ntohl(iph->saddr));
+#endif
 
                 // FIXME: not doing this yet, but can use this len to determine
                 // whether there are any extension headers a la rfc4884 
                 // (and rfc4950 extensions in particular)
-                int inner_pktlen = icmph->un.reserved[1];
+                int inner_pktlen = icmp->reserved[1];
                 if (inner_pktlen == 0) {
                     inner_pktlen = 28;
                 }
 
-                offset = offset + sizeof(struct icmphdr);
+                offset = offset + sizeof(struct _icmphdr);
                 // save srcip and ttl from outer IP header
                 uint32_t srcip = iph->saddr;
                 uint8_t recvttl = iph->ttl;
-                if (data + offset + sizeof(struct iphdr) > data_end) {
+                if (data + offset + sizeof(struct _iphdr) > data_end) {
                     return XDP_PASS;
                 }
-
+#ifdef DEBUG
+                bpf_trace_printk("icmp time exceeded from dest of interest\n");
+#endif
                 // the *inner* v4 header returned by some router where the packet died
-                iph = (struct iphdr*)(data + offset);
-                u32 origdst = iph->daddr;
-
-                if (NULL == ip4_interest.lookup(&origdst)) {
+                iph = (struct _iphdr*)(data + offset);
+                _in6_addr_t origdst = { iph->daddr, 0, 0, 0 };
+                u64 *val = NULL;
+                if ((val = trie.lookup(&origdst)) == NULL) {
                     return XDP_PASS;
                 }
 
@@ -296,9 +302,10 @@ int ingress_path(struct xdp_md *ctx) {
             struct _icmphdr *icmp = (struct _icmphdr*)(data + offset);
             if (icmp->icmp_type == ICMP6_TIME_EXCEEDED) {
 
+                // FIXME: grab nested IP header, etc.
+
+
             }
-
-
         }
     } 
 

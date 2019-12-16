@@ -7,7 +7,8 @@ import ipaddress
 #DEVICE='he-ipv6'
 
 b = BPF(src_file="someta_ebpf.c", cflags=['-DDEBUG', '-DNHOFFSET=14'])
-DEVICE='eno2'
+#DEVICE='eno2'
+DEVICE='wlp4s0'
 
 class _u(ctypes.Union):
     _fields_ = [
@@ -23,21 +24,28 @@ class in6_addr(ctypes.Structure):
 
 # how to inject something into the table
 table = b['trie']
-xaddr = in6_addr()
-ip4 = ipaddress.ip_address('149.43.152.10')
-pstr = ip4.packed
-for i in range(len(pstr)):
-    xaddr._u._addr8[i] = pstr[i]
-for i in range(4, 16):
-    xaddr._u._addr8[i] = 0
-table[xaddr] = ctypes.c_uint64(13)
 
-xaddr = in6_addr()
-ip6 = ipaddress.ip_address('2604:6000:141a:e3:8d2:dcb2:edd4:d60d')
-pstr = ip6.packed
-for i in range(len(pstr)):
-    xaddr._u._addr8[i] = pstr[i]
-table[xaddr] = ctypes.c_uint64(17)
+def address_interest_v4(table, a):
+    xaddr = in6_addr()
+    ip4 = ipaddress.ip_address(a)
+    pstr = ip4.packed
+    for i in range(len(pstr)):
+        xaddr._u._addr8[i] = pstr[i]
+    for i in range(4, 16):
+        xaddr._u._addr8[i] = 0
+    table[xaddr] = ctypes.c_uint64(len(table))
+
+def address_interest_v6(table, a):
+    xaddr = in6_addr()
+    ip6 = ipaddress.ip_address(a)
+    pstr = ip6.packed
+    for i in range(len(pstr)):
+        xaddr._u._addr8[i] = pstr[i]
+    table[xaddr] = ctypes.c_uint64(len(table))
+
+address_interest_v4(table, '149.43.152.10')
+address_interest_v4(table, '149.43.80.25')
+address_interest_v6(table, '2604:6000:141a:e3:8d2:dcb2:edd4:d60d')
 
 xdp_fn = b.load_func("ingress_path", BPF.XDP)
 b.attach_xdp(DEVICE, xdp_fn, 0)
@@ -63,5 +71,14 @@ for k,v in b['trie'].items():
         for i in range(4):
             print("{:02x}".format(k._u._addr8[i]), end='', sep='')
     print(v)
+
+#while True:
+#    try:
+#        task,pid,cpu,flags,ts,msg = b.trace_fields(nonblocking=True)
+#        if task is None:
+#            break
+#        print(task,pid,cpu,flags,ts,msg)
+#    except ValueError:   
+#        break
 
 b.remove_xdp(DEVICE)
