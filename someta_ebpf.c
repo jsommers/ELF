@@ -139,8 +139,8 @@ struct latency_sample {
     u8 recvttl;
 };
 
-BPF_PROG_ARRAY(ingress_prog_array, 255);
-BPF_PROG_ARRAY(egress_prog_array, 255);
+BPF_PROG_ARRAY(ingress_layer3, 8);
+BPF_PROG_ARRAY(egress_layer3, 8);
 
 BPF_HASH(trie, _in6_addr_t, u64); // key: dest address
 BPF_HISTOGRAM(counters, u64, 255); 
@@ -197,110 +197,123 @@ int ingress_path(struct xdp_md *ctx) {
     }
 #endif
 
-    if (ipproto == 4) {
-        if (data + offset + sizeof(struct _iphdr) > data_end) {
-            return XDP_PASS;
-        }
-        struct _iphdr *iph = (struct _iphdr*)(data + offset);
+    ingress_layer3.call(ipproto);
+    return XDP_PASS;
+}
 
-        _in6_addr_t source = { iph->saddr, 0, 0, 0 };
-        u64 *val = NULL;
-        if ((val = trie.lookup(&source)) != NULL) {
-            // source address matches a destination of interest.
-            // update our estimate of maxttl for this destination, but
-            // that's it.
-            int idx = (int)*val;
-            _update_maxttl(idx, iph->ttl);
-            return XDP_PASS;
-        } 
-        counters.increment(iph->protocol); 
-        // if packet is an ICMP6 time exceeded response, then
-        // peel out inner packet and check if it is a probe response
-        if (iph->protocol == IPPROTO_ICMP) {
-            // compute hdr size + shift ahead
-            offset = offset + ((iph->verihl&0x0f) << 2);
-#ifdef DEBUG
-            bpf_trace_printk("ICMP4 pkt from 0x%lx hsize %d\n", ntohl(iph->saddr), ((iph->verihl&0x0f) << 2));
-#endif
-            if (data + offset + sizeof(struct _icmphdr) > data_end) {
-                return XDP_PASS;
-            }
-            struct _icmphdr *icmp = (struct _icmphdr*)(data + offset);
-            if (icmp->icmp_type == ICMP_TIME_EXCEEDED) {
-#ifdef DEBUG
-                bpf_trace_printk("icmp time exceeded from 0x%lx\n", ntohl(iph->saddr));
-#endif
+int ingress_v4(struc xdp_md *ctx) {
+    int offset = NHOFFSET;
 
-                // FIXME: not doing this yet, but can use this len to determine
-                // whether there are any extension headers a la rfc4884 
-                // (and rfc4950 extensions in particular)
-                int inner_pktlen = icmp->reserved[1];
-                if (inner_pktlen == 0) {
-                    inner_pktlen = 28;
-                }
+    if (data + offset + sizeof(struct _iphdr) > data_end) {
+        return XDP_PASS;
+    }
+    struct _iphdr *iph = (struct _iphdr*)(data + offset);
 
-                offset = offset + sizeof(struct _icmphdr);
-                // save srcip and ttl from outer IP header
-                uint32_t srcip = iph->saddr;
-                uint8_t recvttl = iph->ttl;
-                if (data + offset + sizeof(struct _iphdr) > data_end) {
-                    return XDP_PASS;
-                }
-#ifdef DEBUG
-                bpf_trace_printk("icmp time exceeded from dest of interest\n");
-#endif
-                // the *inner* v4 header returned by some router where the packet died
-                iph = (struct _iphdr*)(data + offset);
-                _in6_addr_t origdst = { iph->daddr, 0, 0, 0 };
-                u64 *val = NULL;
-                if ((val = trie.lookup(&origdst)) == NULL) {
-                    return XDP_PASS;
-                }
-
-            #if DEBUG
-                bpf_trace_printk("INGRESS ttl exc from 0x%x rttl %d\n", srcip, recvttl);
-            #endif
-
-
-            }
-
-        }
-    } else if (ipproto == 6) {
-        if (data + offset + sizeof(struct _ip6hdr) > data_end) {
-            return XDP_PASS;
-        }
-        struct _ip6hdr *iph = (struct _ip6hdr*)(data + offset);
-        _in6_addr_t source = iph->saddr;
-        u64 *val = NULL;
-        if ((val = trie.lookup(&source)) != NULL) {
-            // source address matches a destination of interest.
-            // update our estimate of maxttl for this destination, but
-            // that's it.
-            int idx = (int)*val;
-            _update_maxttl(idx, iph->hop_limit);
-            return XDP_PASS;
-        } 
-        counters.increment(iph->protocol);
-        // if packet is an ICMP6 time exceeded response, then
-        // peel out inner packet and check if it is a probe response
-        if (iph->protocol == IPPROTO_ICMP6) {
-#ifdef DEBUG
-            bpf_trace_printk("ICMP6 pkt from %lx:%lx:", ntohl(source._u._addr32[0]), ntohl(source._u._addr32[1]));
-            bpf_trace_printk("%lx:%lx\n", ntohl(source._u._addr32[2]), ntohl(source._u._addr32[3]));
-#endif
-            offset = offset + sizeof(struct _ip6hdr);
-            if (data + offset + sizeof(struct _icmphdr) > data_end) {
-                return XDP_PASS;
-            }
-            struct _icmphdr *icmp = (struct _icmphdr*)(data + offset);
-            if (icmp->icmp_type == ICMP6_TIME_EXCEEDED) {
-
-                // FIXME: grab nested IP header, etc.
-
-
-            }
-        }
+    _in6_addr_t source = { iph->saddr, 0, 0, 0 };
+    u64 *val = NULL;
+    if ((val = trie.lookup(&source)) != NULL) {
+        // source address matches a destination of interest.
+        // update our estimate of maxttl for this destination, but
+        // that's it.
+        int idx = (int)*val;
+        _update_maxttl(idx, iph->ttl);
+        return XDP_PASS;
     } 
+    counters.increment(iph->protocol); 
+    // if packet is an ICMP time exceeded response, then
+    // peel out inner packet and check if it is a probe response
+    if (iph->protocol != IPPROTO_ICMP) {
+        return XDP_PASS;
+    }
+
+    // compute hdr size + shift ahead
+    offset = offset + ((iph->verihl&0x0f) << 2);
+#ifdef DEBUG
+    bpf_trace_printk("ICMP4 pkt from 0x%lx hsize %d\n", ntohl(iph->saddr), ((iph->verihl&0x0f) << 2));
+#endif
+    if (data + offset + sizeof(struct _icmphdr) > data_end) {
+        return XDP_PASS;
+    }
+    struct _icmphdr *icmp = (struct _icmphdr*)(data + offset);
+    if (icmp->icmp_type != ICMP_TIME_EXCEEDED) {
+        return XDP_PASS;
+    }
+
+#ifdef DEBUG
+    bpf_trace_printk("icmp time exceeded from 0x%lx\n", ntohl(iph->saddr));
+#endif
+
+    // FIXME: not doing this yet, but can use this len to determine
+    // whether there are any extension headers a la rfc4884 
+    // (and rfc4950 extensions in particular)
+    int inner_pktlen = icmp->reserved[1];
+    if (inner_pktlen == 0) {
+        inner_pktlen = 28;
+    }
+
+    offset = offset + sizeof(struct _icmphdr);
+    // save srcip and ttl from outer IP header
+    uint32_t srcip = iph->saddr;
+    uint8_t recvttl = iph->ttl;
+    if (data + offset + sizeof(struct _iphdr) > data_end) {
+        return XDP_PASS;
+    }
+#ifdef DEBUG
+    bpf_trace_printk("icmp time exceeded from dest of interest\n");
+#endif
+    // the *inner* v4 header returned by some router where the packet died
+    iph = (struct _iphdr*)(data + offset);
+    _in6_addr_t origdst = { iph->daddr, 0, 0, 0 };
+    u64 *val = NULL;
+    if ((val = trie.lookup(&origdst)) == NULL) {
+        return XDP_PASS;
+    }
+
+    #if DEBUG
+        bpf_trace_printk("INGRESS ttl exc from 0x%x rttl %d\n", srcip, recvttl);
+    #endif
+
+    return XDP_PASS;
+}
+
+int ingress_v6(struc xdp_md *ctx) {
+    int offset = NHOFFSET;
+
+    if (data + offset + sizeof(struct _ip6hdr) > data_end) {
+        return XDP_PASS;
+    }
+    struct _ip6hdr *iph = (struct _ip6hdr*)(data + offset);
+    _in6_addr_t source = iph->saddr;
+    u64 *val = NULL;
+    if ((val = trie.lookup(&source)) != NULL) {
+        // source address matches a destination of interest.
+        // update our estimate of maxttl for this destination, but
+        // that's it.
+        int idx = (int)*val;
+        _update_maxttl(idx, iph->hop_limit);
+        return XDP_PASS;
+    } 
+    counters.increment(iph->protocol);
+    // if packet is an ICMP6 time exceeded response, then
+    // peel out inner packet and check if it is a probe response
+    if (iph->protocol != IPPROTO_ICMP6) {
+        return XDP_PASS;
+    }
+
+#ifdef DEBUG
+    bpf_trace_printk("ICMP6 pkt from %lx:%lx:", ntohl(source._u._addr32[0]), ntohl(source._u._addr32[1]));
+    bpf_trace_printk("%lx:%lx\n", ntohl(source._u._addr32[2]), ntohl(source._u._addr32[3]));
+#endif
+    offset = offset + sizeof(struct _ip6hdr);
+    if (data + offset + sizeof(struct _icmphdr) > data_end) {
+        return XDP_PASS;
+    }
+    struct _icmphdr *icmp = (struct _icmphdr*)(data + offset);
+    if (icmp->icmp_type != ICMP6_TIME_EXCEEDED) {
+        return XDP_PASS;0
+    }
+
+    // FIXME: grab nested IP header, etc.
 
     return XDP_PASS;
 }

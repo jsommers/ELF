@@ -4,7 +4,7 @@ import ipaddress
 import sys
 import time
 
-# from bcc import BPF
+from bcc import BPF
 
 class _u(ctypes.Union):
     _fields_ = [
@@ -33,6 +33,11 @@ def address_interest_v6(table, a):
     for i in range(len(pstr)):
         xaddr._u._addr8[i] = pstr[i]
     table[xaddr] = ctypes.c_uint64(len(table))
+
+def _set_bpf_jumptable(tablename, idx, fnname):
+    tail_fn = b.load_func(fnname, BPF.XDP)
+    prog_array = b.get_table(tablename)
+    prog_array[c_int(idx)] = c_int(tail_fn.fd)
 
 def main(args):
     cflags = []
@@ -71,6 +76,9 @@ def main(args):
 
     xdp_fn = b.load_func("ingress_path", BPF.XDP)
     b.attach_xdp(DEVICE, xdp_fn, 0)
+
+    for idx,fnname in [(4,'ingress_v4'), (6, 'ingress_v6')]:
+        _set_bpf_jumptable('ingress_layer3', idx, fnname)
 
     print("start")
     time.sleep(2)
