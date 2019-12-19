@@ -65,7 +65,7 @@ def main(args):
 
     bcc_debugflag = 0     
     if args.debug:
-        cflags.append('-DDEBUG')
+        cflags.append('-DDEBUG=1')
         bcc_debugflag = bcc.DEBUG_BPF_REGISTER_STATE | bcc.DEBUG_SOURCE | bcc.DEBUG_BPF | bcc.DEBUG_LLVM_IR
 
     b = BPF(src_file='someta_ebpf.c', debug=bcc_debugflag, cflags=cflags)
@@ -108,6 +108,12 @@ def main(args):
         
     for idx,fnname in [(4,'egress_v4'), (6, 'egress_v6')]:
         _set_bpf_jumptable(b, 'egress_layer3', idx, fnname, BPF.SCHED_CLS)
+
+    for idx,fnname in [(1, 'egress_v4_icmp'), (6, 'egress_v4_tcp'), (17, 'egress_v4_udp')]:
+        _set_bpf_jumptable(b, 'egress_v4_proto', idx, fnname, BPF.SCHED_CLS)
+
+    for idx,fnname in [(1, 'egress_v6_icmp'), (6, 'egress_v6_tcp'), (17, 'egress_v6_udp')]:
+        _set_bpf_jumptable(b, 'egress_v6_proto', idx, fnname, BPF.SCHED_CLS)
 
     logging.info("start")
     time.sleep(2)

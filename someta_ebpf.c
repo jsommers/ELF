@@ -146,7 +146,11 @@ struct latency_sample {
 };
 
 BPF_PROG_ARRAY(ingress_layer3, 8);
+BPF_PROG_ARRAY(ingress_v4_proto, 255);
+BPF_PROG_ARRAY(ingress_v6_proto, 255);
 BPF_PROG_ARRAY(egress_layer3, 8);
+BPF_PROG_ARRAY(egress_v4_proto, 255);
+BPF_PROG_ARRAY(egress_v6_proto, 255);
 
 BPF_HASH(trie, _in6_addr_t, u64); // key: dest address
 BPF_HISTOGRAM(counters, u64, 255); 
@@ -190,6 +194,27 @@ static inline int _should_probe_dest(int idx) {
     return FALSE;
 }
 
+int egress_v4_icmp(struct __sk_buff *ctx) {
+#if DEBUG
+    bpf_trace_printk("egress v4 icmp mark %d\n", ctx->mark);
+#endif
+    return TC_ACT_OK;
+}
+
+int egress_v4_tcp(struct __sk_buff *ctx) {
+#if DEBUG
+    bpf_trace_printk("egress v4 tcp mark %d\n", ctx->mark);
+#endif
+    return TC_ACT_OK;
+}
+
+int egress_v4_udp(struct __sk_buff *ctx) {
+#if DEBUG
+    bpf_trace_printk("egress v4 udp mark %d\n", ctx->mark);
+#endif
+    return TC_ACT_OK;
+}
+
 int egress_v4(struct __sk_buff *ctx) {
     int offset = NHOFFSET;
     void* data = (void*)(long)ctx->data;
@@ -209,6 +234,7 @@ int egress_v4(struct __sk_buff *ctx) {
 #ifdef DEBUG
     bpf_trace_printk("egress v4 dest of interest -- idx %d, currmark %d\n", idx, ctx->mark);
 #endif
+    // store idx in ctx for later reference
     ctx->mark = idx;
 
     if (!_should_probe_dest(idx)) {
@@ -218,9 +244,31 @@ int egress_v4(struct __sk_buff *ctx) {
     bpf_trace_printk("egress v4 should probe -- idx %d\n", idx);
 #endif
 
-    // FIXME: store idx in ctx for future reference
-    // FIXME: jump to code to handle egress v4 for icmp/tcp/udp
+    // jump to code to handle egress v4 for icmp/tcp/udp
+    egress_v4_proto.call(ctx, iph->protocol);
 
+    return TC_ACT_OK;
+}
+
+int egress_v6_icmp(struct __sk_buff *ctx) {
+#if DEBUG
+    bpf_trace_printk("egress v6 icmp mark %d\n", ctx->mark);
+#endif
+
+    return TC_ACT_OK;
+}
+
+int egress_v6_tcp(struct __sk_buff *ctx) {
+#if DEBUG
+    bpf_trace_printk("egress v6 tcp mark %d\n", ctx->mark);
+#endif
+    return TC_ACT_OK;
+}
+
+int egress_v6_udp(struct __sk_buff *ctx) {
+#if DEBUG
+    bpf_trace_printk("egress v6 udp mark %d\n", ctx->mark);
+#endif
     return TC_ACT_OK;
 }
 
@@ -243,6 +291,7 @@ int egress_v6(struct __sk_buff *ctx) {
 #ifdef DEBUG
     bpf_trace_printk("egress v6 dest of interest -- idx %d, currmark %d\n", idx, ctx->mark);
 #endif
+    // store idx in ctx for future reference
     ctx->mark = idx;
 
     if (!_should_probe_dest(idx)) {
@@ -252,8 +301,8 @@ int egress_v6(struct __sk_buff *ctx) {
     bpf_trace_printk("egress v6 should probe -- idx %d\n", idx);
 #endif
 
-    // FIXME: store idx in ctx for future reference
-    // FIXME: jump to code to handle egress v6 for icmp/tcp/udp
+    // jump to code to handle egress v6 for icmp/tcp/udp
+    egress_v6_proto.call(ctx, iph->protocol);
 
     return TC_ACT_OK;
 }
