@@ -5,6 +5,7 @@ import logging
 import sys
 import time
 
+import bcc
 from bcc import BPF
 import pyroute2
 
@@ -36,12 +37,13 @@ def address_interest_v6(table, a):
         xaddr._u._addr8[i] = pstr[i]
     table[xaddr] = ctypes.c_uint64(len(table))
 
-def _set_bpf_jumptable(tablename, idx, fnname, progtype):
-    tail_fn = b.load_func(fnname, progtype)
-    prog_array = b.get_table(tablename)
-    prog_array[c_int(idx)] = c_int(tail_fn.fd)
+def _set_bpf_jumptable(bpf, tablename, idx, fnname, progtype):
+    tail_fn = bpf.load_func(fnname, progtype)
+    prog_array = bpf.get_table(tablename)
+    prog_array[ctypes.c_int(idx)] = ctypes.c_int(tail_fn.fd)
 
 def main(args):
+    logging.basicConfig(level=logging.DEBUG)
     ip = pyroute2.IPRoute()
     ipdb = pyroute2.IPDB(nl=ip)
     try:
@@ -51,7 +53,7 @@ def main(args):
         sys.exit(-1)
     logging.info("ifindex for {} is {}".format(args.interface, idx))
 
-    cflags = ['-Wall', '-DMINPROBE=1000000'] # 1 millisec
+    cflags = ['-Wall', '-DMIN_PROBE=1000000'] # 1 millisec
     if args.encapsulation == 'ipinip':
         cflags.append('-DTUNNEL=4')
         cflags.append('-DNHOFFSET=20')
@@ -87,11 +89,11 @@ def main(args):
         else:
             address_interest_v6(table, addr)
 
-    egress_fn = ibpf.load_func('egress_path', bpf.SCHED_CLS)
-    ingress_fn = b.load_func("ingress_path", bpf.XDP)
-    b.attach_xdp(DEVICE, ingress_fn, 0)
+    egress_fn = b.load_func('egress_path', BPF.SCHED_CLS)
+    ingress_fn = b.load_func("ingress_path", BPF.XDP)
+    b.attach_xdp(args.interface, ingress_fn, 0)
 
-     try:
+    try:
         ip.tc('del', 'clsact', idx)
     except pyroute2.netlink.exceptions.NetlinkError:
         pass
@@ -102,10 +104,10 @@ def main(args):
 
     # set up jump tables for v4/v6 processing on ingress + egress
     for idx,fnname in [(4,'ingress_v4'), (6, 'ingress_v6')]:
-        _set_bpf_jumptable('ingress_layer3', idx, fnname, bpf.XDP)
+        _set_bpf_jumptable(b, 'ingress_layer3', idx, fnname, BPF.XDP)
         
     for idx,fnname in [(4,'egress_v4'), (6, 'egress_v6')]:
-        _set_bpf_jumptable('egress_layer3', idx, fnname, bpf.SCHED_CLS)
+        _set_bpf_jumptable(b, 'egress_layer3', idx, fnname, BPF.SCHED_CLS)
 
     logging.info("start")
     time.sleep(2)
@@ -143,8 +145,14 @@ def main(args):
     #    except ValueError:   
     #        break
 
-    b.remove_xdp(args.interface)
-    ip.tc('del', 'clsact', idx)
+    try:
+        b.remove_xdp(args.interface)
+    except Exception as e:
+        print("Failed to remove xdp fn: ", str(e))
+    try:
+        ip.tc('del', 'clsact', idx)
+    except Exception as e:
+        print("Failed to remove tc fn: ", str(e))
     ipdb.release()
 
 
@@ -155,6 +163,4 @@ if __name__ == '__main__':
     parser.add_argument('-e', '--encapsulation', choices=('ethernet', 'ipinip', 'ip6inip'), default='ethernet', help='How packets are encapsulated on the wire')
     parser.add_argument('addresses', metavar='addresses', nargs='*', type=str, help='IP addresses of interest')
     args = parser.parse_args()
-    print(args)
-    sys.exit()
     main(args)

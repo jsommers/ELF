@@ -215,7 +215,7 @@ int egress_v4(struct __sk_buff *ctx) {
         return TC_ACT_OK;
     }
 #ifdef DEBUG
-    bpf_trace_printf("egress v4 should probe -- idx %d\n", idx);
+    bpf_trace_printk("egress v4 should probe -- idx %d\n", idx);
 #endif
 
     // FIXME: store idx in ctx for future reference
@@ -249,7 +249,7 @@ int egress_v6(struct __sk_buff *ctx) {
         return TC_ACT_OK;
     }
 #ifdef DEBUG
-    bpf_trace_printf("egress v6 should probe -- idx %d\n", idx);
+    bpf_trace_printk("egress v6 should probe -- idx %d\n", idx);
 #endif
 
     // FIXME: store idx in ctx for future reference
@@ -281,7 +281,7 @@ int egress_path(struct __sk_buff *ctx) {
     }
 #endif
 
-    egress_layer3.call(ipproto);
+    egress_layer3.call(ctx, ipproto);
     return TC_ACT_OK; 
 }
 
@@ -308,11 +308,13 @@ int ingress_path(struct xdp_md *ctx) {
     }
 #endif
 
-    ingress_layer3.call(ipproto);
+    ingress_layer3.call(ctx, ipproto);
     return XDP_PASS;
 }
 
 int ingress_v4(struct xdp_md *ctx) {
+    void* data = (void*)(long)ctx->data;
+    void* data_end = (void*)(long)ctx->data_end;
     int offset = NHOFFSET;
 
     if (data + offset + sizeof(struct _iphdr) > data_end) {
@@ -341,7 +343,7 @@ int ingress_v4(struct xdp_md *ctx) {
     // compute hdr size + shift ahead
     offset = offset + ((iph->verihl&0x0f) << 2);
 #ifdef DEBUG
-    bpf_trace_printk("ICMP4 pkt from 0x%lx hsize %d\n", ntohl(iph->saddr), ((iph->verihl&0x0f) << 2));
+    bpf_trace_printk("ICMP4 ingress from 0x%lx hsize %d\n", ntohl(iph->saddr), ((iph->verihl&0x0f) << 2));
 #endif
     if (data + offset + sizeof(struct _icmphdr) > data_end) {
         return XDP_PASS;
@@ -376,7 +378,7 @@ int ingress_v4(struct xdp_md *ctx) {
     // the *inner* v4 header returned by some router where the packet died
     iph = (struct _iphdr*)(data + offset);
     _in6_addr_t origdst = { iph->daddr, 0, 0, 0 };
-    u64 *val = NULL;
+    val = NULL;
     if ((val = trie.lookup(&origdst)) == NULL) {
         return XDP_PASS;
     }
@@ -388,7 +390,9 @@ int ingress_v4(struct xdp_md *ctx) {
     return XDP_PASS;
 }
 
-int ingress_v6(struc xdp_md *ctx) {
+int ingress_v6(struct xdp_md *ctx) {
+    void* data = (void*)(long)ctx->data;
+    void* data_end = (void*)(long)ctx->data_end;
     int offset = NHOFFSET;
 
     if (data + offset + sizeof(struct _ip6hdr) > data_end) {
@@ -413,7 +417,7 @@ int ingress_v6(struc xdp_md *ctx) {
     }
 
 #ifdef DEBUG
-    bpf_trace_printk("ICMP6 pkt from %lx:%lx:", ntohl(source._u._addr32[0]), ntohl(source._u._addr32[1]));
+    bpf_trace_printk("ICMP6 ingress from %lx:%lx:", ntohl(source._u._addr32[0]), ntohl(source._u._addr32[1]));
     bpf_trace_printk("%lx:%lx\n", ntohl(source._u._addr32[2]), ntohl(source._u._addr32[3]));
 #endif
     offset = offset + sizeof(struct _ip6hdr);
@@ -450,7 +454,7 @@ int ingress_v6(struc xdp_md *ctx) {
     // the *inner* v6 header returned by some router where the packet died
     iph = (struct _ip6hdr*)(data + offset);
     _in6_addr_t origdst = iph->daddr;
-    u64 *val = NULL;
+    val = NULL;
     if ((val = trie.lookup(&origdst)) == NULL) {
         return XDP_PASS;
     }
