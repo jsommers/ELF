@@ -198,7 +198,7 @@ int egress_v4(struct __sk_buff *ctx) {
         return XDP_PASS;
     }
     struct _iphdr *iph = (struct _iphdr*)(data + offset);
-    _in6_addr_t dest = { iph->daddr, 0, 0, 0};
+    _in6_addr_t dest = { iph->daddr, 0, 0, 0 };
     u64 *val = NULL;
     if ((val = trie.lookup(&dest)) == NULL) {
         return TC_ACT_OK;
@@ -263,8 +263,6 @@ int egress_path(struct __sk_buff *ctx) {
     void* data_end = (void*)(long)ctx->data_end;
 
     int ipproto = 0;
-    int offset = NHOFFSET;
-
 #if TUNNEL == 4
     ipproto = 4;
 #elif TUNNEL == 6
@@ -290,8 +288,6 @@ int ingress_path(struct xdp_md *ctx) {
     void* data_end = (void*)(long)ctx->data_end;
 
     int ipproto = 0;
-    int offset = NHOFFSET;
-
 #if TUNNEL == 4
     ipproto = 4;
 #elif TUNNEL == 6

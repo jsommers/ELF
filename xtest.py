@@ -53,7 +53,7 @@ def main(args):
         sys.exit(-1)
     logging.info("ifindex for {} is {}".format(args.interface, idx))
 
-    cflags = ['-Wall', '-DMIN_PROBE=1000000'] # 1 millisec
+    cflags = ['-DMIN_PROBE=1000000'] # 1 millisec
     if args.encapsulation == 'ipinip':
         cflags.append('-DTUNNEL=4')
         cflags.append('-DNHOFFSET=20')
@@ -136,23 +136,26 @@ def main(args):
                 print("{:02x}".format(k._u._addr8[i]), end='', sep='')
         print(v)
 
-    #while True:
-    #    try:
-    #        task,pid,cpu,flags,ts,msg = b.trace_fields(nonblocking=True)
-    #        if task is None:
-    #            break
-    #        print(task,pid,cpu,flags,ts,msg)
-    #    except ValueError:   
-    #        break
+    if args.debug:
+        logging.debug("kernel debug messages: ")
+        while True:
+            try:
+                task,pid,cpu,flags,ts,msg = b.trace_fields(nonblocking=True)
+                if task is None:
+                    break
+                logging.debug("{} {} {} {} {} {}".format(task,pid,cpu,flags,ts,msg))
+            except ValueError:   
+                break
 
     try:
         b.remove_xdp(args.interface)
     except Exception as e:
         print("Failed to remove xdp fn: ", str(e))
+
     try:
         ip.tc('del', 'clsact', idx)
-    except Exception as e:
-        print("Failed to remove tc fn: ", str(e))
+    except pyroute2.netlink.exceptions.NetlinkError:
+        pass
     ipdb.release()
 
 
