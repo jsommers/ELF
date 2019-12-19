@@ -1,10 +1,12 @@
 import argparse
 import ctypes
 import ipaddress
+import logging
 import sys
 import time
 
 from bcc import BPF
+import pyroute2
 
 class _u(ctypes.Union):
     _fields_ = [
@@ -34,13 +36,22 @@ def address_interest_v6(table, a):
         xaddr._u._addr8[i] = pstr[i]
     table[xaddr] = ctypes.c_uint64(len(table))
 
-def _set_bpf_jumptable(tablename, idx, fnname):
-    tail_fn = b.load_func(fnname, BPF.XDP)
+def _set_bpf_jumptable(tablename, idx, fnname, progtype):
+    tail_fn = b.load_func(fnname, progtype)
     prog_array = b.get_table(tablename)
     prog_array[c_int(idx)] = c_int(tail_fn.fd)
 
 def main(args):
-    cflags = []
+    ip = pyroute2.IPRoute()
+    ipdb = pyroute2.IPDB(nl=ip)
+    try:
+        idx = ipdb.interfaces[args.interface].index
+    except KeyError:
+        logging.error("Invalid device {}".format(args.interface))
+        sys.exit(-1)
+    logging.info("ifindex for {} is {}".format(args.interface, idx))
+
+    cflags = ['-Wall', '-DMINPROBE=1000000'] # 1 millisec
     if args.encapsulation == 'ipinip':
         cflags.append('-DTUNNEL=4')
         cflags.append('-DNHOFFSET=20')
@@ -50,10 +61,12 @@ def main(args):
     elif args.encapsulation == 'ethernet':
         cflags.append('-DNHOFFSET=14')
 
+    bcc_debugflag = 0     
     if args.debug:
         cflags.append('-DDEBUG')
+        bcc_debugflag = bcc.DEBUG_BPF_REGISTER_STATE | bcc.DEBUG_SOURCE | bcc.DEBUG_BPF | bcc.DEBUG_LLVM_IR
 
-    b = BPF(src_file='someta_ebpf.c', cflags=cflags)
+    b = BPF(src_file='someta_ebpf.c', debug=bcc_debugflag, cflags=cflags)
 
     #b = BPF(src_file="someta_ebpf.c", cflags=['-DTUNNEL=6', '-DNHOFFSET=20', '-DDEBUG'])
     #DEVICE='he-ipv6'
@@ -74,15 +87,34 @@ def main(args):
         else:
             address_interest_v6(table, addr)
 
-    xdp_fn = b.load_func("ingress_path", BPF.XDP)
-    b.attach_xdp(DEVICE, xdp_fn, 0)
+    egress_fn = ibpf.load_func('egress_path', bpf.SCHED_CLS)
+    ingress_fn = b.load_func("ingress_path", bpf.XDP)
+    b.attach_xdp(DEVICE, ingress_fn, 0)
 
+     try:
+        ip.tc('del', 'clsact', idx)
+    except pyroute2.netlink.exceptions.NetlinkError:
+        pass
+
+    ip.tc('add', 'clsact', idx)
+    ip.tc('add-filter', 'bpf', idx, ':1', fd=egress_fn.fd, name=egress_fn.name,
+            parent='ffff:fff3', classid=1, direct_action=True)
+
+    # set up jump tables for v4/v6 processing on ingress + egress
     for idx,fnname in [(4,'ingress_v4'), (6, 'ingress_v6')]:
-        _set_bpf_jumptable('ingress_layer3', idx, fnname)
+        _set_bpf_jumptable('ingress_layer3', idx, fnname, bpf.XDP)
+        
+    for idx,fnname in [(4,'egress_v4'), (6, 'egress_v6')]:
+        _set_bpf_jumptable('egress_layer3', idx, fnname, bpf.SCHED_CLS)
 
-    print("start")
+    logging.info("start")
     time.sleep(2)
-    print("ok - done")
+    logging.info("ok - done")
+
+    logging.info("Waiting 0.5s for any stray responses")
+    time.sleep(0.5)
+    logging.info("removing filters and shutting down")
+
     print('counters')
     for k,v in b['counters'].items():
         print("\t",k,v)
@@ -110,7 +142,11 @@ def main(args):
     #        print(task,pid,cpu,flags,ts,msg)
     #    except ValueError:   
     #        break
-    b.remove_xdp(DEVICE)
+
+    b.remove_xdp(args.interface)
+    ip.tc('del', 'clsact', idx)
+    ipdb.release()
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

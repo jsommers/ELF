@@ -3,6 +3,7 @@
  */
 
 #define BPF_LICENSE GPL
+#define KBUILD_MODNAME "foo"
 
 // largely copies of linux header definitions.
 // why?  to avoid any #includes and kernel dependencies
@@ -110,6 +111,11 @@ struct _icmphdr {
 #define TC_ACT_SHOT     2
 #endif
 
+#ifndef FALSE
+#define FALSE 0
+#define TRUE 1
+#endif
+
 #define MAXDEST     128
 
 struct probe_dest {
@@ -170,7 +176,112 @@ static inline void _update_maxttl(int idx, int ttl) {
     pd->max_ttl = num_hops;
 }
 
+static inline int _should_probe_dest(int idx) {
+    struct probe_dest *pd = destinfo.lookup(&idx);
+    if (pd == NULL) {
+        return FALSE;
+    }
+
+    u64 now = bpf_ktime_get_ns();
+    if ((now - pd->last_send) > MIN_PROBE) {
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+int egress_v4(struct __sk_buff *ctx) {
+    int offset = NHOFFSET;
+    void* data = (void*)(long)ctx->data;
+    void* data_end = (void*)(long)ctx->data_end;
+    if (data + offset + sizeof(struct _iphdr) > data_end) {
+        return XDP_PASS;
+    }
+    struct _iphdr *iph = (struct _iphdr*)(data + offset);
+    _in6_addr_t dest = { iph->daddr, 0, 0, 0};
+    u64 *val = NULL;
+    if ((val = trie.lookup(&dest)) == NULL) {
+        return TC_ACT_OK;
+    }
+
+    // dest addr matches a destination of interest
+    int idx = (int)*val;
+#ifdef DEBUG
+    bpf_trace_printk("egress v4 dest of interest -- idx %d, currmark %d\n", idx, ctx->mark);
+#endif
+    ctx->mark = idx;
+
+    if (!_should_probe_dest(idx)) {
+        return TC_ACT_OK;
+    }
+#ifdef DEBUG
+    bpf_trace_printf("egress v4 should probe -- idx %d\n", idx);
+#endif
+
+    // FIXME: store idx in ctx for future reference
+    // FIXME: jump to code to handle egress v4 for icmp/tcp/udp
+
+    return TC_ACT_OK;
+}
+
+int egress_v6(struct __sk_buff *ctx) {
+    int offset = NHOFFSET;
+    void* data = (void*)(long)ctx->data;
+    void* data_end = (void*)(long)ctx->data_end;
+    if (data + offset + sizeof(struct _ip6hdr) > data_end) {
+        return XDP_PASS;
+    }
+    struct _ip6hdr *iph = (struct _ip6hdr*)(data + offset);
+    _in6_addr_t dest = iph->daddr;
+    u64 *val = NULL;
+    if ((val = trie.lookup(&dest)) == NULL) {
+        return TC_ACT_OK;
+    }
+
+    // dest addr matches a destination of interest
+    int idx = (int)*val;
+#ifdef DEBUG
+    bpf_trace_printk("egress v6 dest of interest -- idx %d, currmark %d\n", idx, ctx->mark);
+#endif
+    ctx->mark = idx;
+
+    if (!_should_probe_dest(idx)) {
+        return TC_ACT_OK;
+    }
+#ifdef DEBUG
+    bpf_trace_printf("egress v6 should probe -- idx %d\n", idx);
+#endif
+
+    // FIXME: store idx in ctx for future reference
+    // FIXME: jump to code to handle egress v6 for icmp/tcp/udp
+
+    return TC_ACT_OK;
+}
+
 int egress_path(struct __sk_buff *ctx) {
+    void* data = (void*)(long)ctx->data;
+    void* data_end = (void*)(long)ctx->data_end;
+
+    int ipproto = 0;
+    int offset = NHOFFSET;
+
+#if TUNNEL == 4
+    ipproto = 4;
+#elif TUNNEL == 6
+    ipproto = 6;
+#else
+    if (data + sizeof(struct _ethhdr) > data_end) {
+        return XDP_PASS;
+    }
+    struct _ethhdr *eth = (struct _ethhdr *)data;
+    if (eth->ether_type == htons(ETHERTYPE_IP)) {
+        ipproto = 4;
+    } else if (eth->ether_type == htons(ETHERTYPE_IP6)) {
+        ipproto = 6;
+    }
+#endif
+
+    egress_layer3.call(ipproto);
     return TC_ACT_OK; 
 }
 
@@ -201,7 +312,7 @@ int ingress_path(struct xdp_md *ctx) {
     return XDP_PASS;
 }
 
-int ingress_v4(struc xdp_md *ctx) {
+int ingress_v4(struct xdp_md *ctx) {
     int offset = NHOFFSET;
 
     if (data + offset + sizeof(struct _iphdr) > data_end) {
@@ -220,6 +331,7 @@ int ingress_v4(struc xdp_md *ctx) {
         return XDP_PASS;
     } 
     counters.increment(iph->protocol); 
+
     // if packet is an ICMP time exceeded response, then
     // peel out inner packet and check if it is a probe response
     if (iph->protocol != IPPROTO_ICMP) {
@@ -248,7 +360,7 @@ int ingress_v4(struc xdp_md *ctx) {
     // (and rfc4950 extensions in particular)
     int inner_pktlen = icmp->reserved[1];
     if (inner_pktlen == 0) {
-        inner_pktlen = 28;
+        inner_pktlen = sizeof(struct _iphdr) + 8;
     }
 
     offset = offset + sizeof(struct _icmphdr);
@@ -310,10 +422,43 @@ int ingress_v6(struc xdp_md *ctx) {
     }
     struct _icmphdr *icmp = (struct _icmphdr*)(data + offset);
     if (icmp->icmp_type != ICMP6_TIME_EXCEEDED) {
-        return XDP_PASS;0
+        return XDP_PASS;
     }
 
-    // FIXME: grab nested IP header, etc.
+#ifdef DEBUG
+    bpf_trace_printk("icmp6 time exceeded\n");
+#endif
+
+    // FIXME: not doing this yet, but can use this len to determine
+    // whether there are any extension headers a la rfc4884 
+    // (and rfc4950 extensions in particular)
+    int inner_pktlen = icmp->reserved[1];
+    if (inner_pktlen == 0) {
+        inner_pktlen = sizeof(struct _ip6hdr) + 8;
+    }
+
+    offset = offset + sizeof(struct _icmphdr);
+    // save srcip and ttl from outer IP header
+    _in6_addr_t srcip = iph->saddr;
+    uint8_t recvttl = iph->hop_limit;
+    if (data + offset + sizeof(struct _ip6hdr) > data_end) {
+        return XDP_PASS;
+    }
+#ifdef DEBUG
+    bpf_trace_printk("icmp6 time exceeded from dest of interest\n");
+#endif
+    // the *inner* v6 header returned by some router where the packet died
+    iph = (struct _ip6hdr*)(data + offset);
+    _in6_addr_t origdst = iph->daddr;
+    u64 *val = NULL;
+    if ((val = trie.lookup(&origdst)) == NULL) {
+        return XDP_PASS;
+    }
+
+#if DEBUG
+    bpf_trace_printk("INGRESS ttl exc from 0x%x rttl %d\n", srcip, recvttl);
+#endif
+
 
     return XDP_PASS;
 }

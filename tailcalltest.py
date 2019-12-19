@@ -1,9 +1,13 @@
-import bcc
+from bcc import BPF
 
 code='''
 BPF_PROG_ARRAY(prog_array, 10);
 
-int tail_call(void *ctx) {
+int ingress_path(void *ctx) {
+    void* data_end = (void*)(long)ctx->data_end;
+    void* data = (void*)(long)ctx->data;
+
+
     bpf_trace_printk("Tail-call\n");
     return 0;
 }
@@ -16,7 +20,9 @@ int do_tail_call(void *ctx) {
 '''
 
 b = BPF(text=code)
-tail_fn = b.load_func("tail_call", BPF.KPROBE)
-prog_array = b.get_table("prog_array")
-prog_array[c_int(2)] = c_int(tail_fn.fd)
-b.attach_kprobe(event="some_kprobe_event", fn_name="do_tail_call")
+DEVICE='eno2'
+ingress_fn = b.load_func("ingress_path", bpf.XDP)
+b.attach_xdp(DEVICE, ingress_fn, 0)
+
+
+b.remove_xdp(DEVICE)
