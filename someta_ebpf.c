@@ -353,6 +353,11 @@ int ingress_path(struct xdp_md *ctx) {
     }
 #endif
 
+#if DEBUG
+    bpf_trace_printk("before data 0x%x data_end 0x%x  data_meta 0x%x\n", data, data_end, xdp->data_meta);
+#endif
+    bpf_xdp_adjust_meta(ctx, 32);
+
     ingress_layer3.call(ctx, ipproto);
     return XDP_PASS;
 }
@@ -361,6 +366,9 @@ int ingress_v4(struct xdp_md *ctx) {
     void* data = (void*)(long)ctx->data;
     void* data_end = (void*)(long)ctx->data_end;
     int offset = NHOFFSET;
+#if DEBUG
+    bpf_trace_printk("after data 0x%x data_end 0x%x  data_meta 0x%x\n", data, data_end, xdp->data_meta);
+#endif
 
     if (data + offset + sizeof(struct _iphdr) > data_end) {
         return XDP_PASS;
@@ -439,6 +447,9 @@ int ingress_v6(struct xdp_md *ctx) {
     void* data = (void*)(long)ctx->data;
     void* data_end = (void*)(long)ctx->data_end;
     int offset = NHOFFSET;
+#if DEBUG
+    bpf_trace_printk("after data 0x%x data_end 0x%x  data_meta 0x%x\n", data, data_end, xdp->data_meta);
+#endif
 
     if (data + offset + sizeof(struct _ip6hdr) > data_end) {
         return XDP_PASS;
