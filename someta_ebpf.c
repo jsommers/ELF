@@ -353,21 +353,27 @@ int ingress_path(struct xdp_md *ctx) {
     }
 #endif
 
-#if DEBUG
-    bpf_trace_printk("before data 0x%x data_end 0x%x  data_meta 0x%x\n", data, data_end, xdp->data_meta);
-#endif
-    bpf_xdp_adjust_meta(ctx, 32);
-
     ingress_layer3.call(ctx, ipproto);
     return XDP_PASS;
 }
 
 int ingress_v4(struct xdp_md *ctx) {
+    int rv = bpf_xdp_adjust_meta(ctx, -4);
+#if DEBUG
+    bpf_trace_printk("adjust meta rv %d\n", rv);
+#endif
+
     void* data = (void*)(long)ctx->data;
     void* data_end = (void*)(long)ctx->data_end;
+
+    int *meta = (void*)ctx->data_meta;
+    if (meta + 1 > data) {
+        return XDP_PASS;
+    }
+
     int offset = NHOFFSET;
 #if DEBUG
-    bpf_trace_printk("after data 0x%x data_end 0x%x  data_meta 0x%x\n", data, data_end, xdp->data_meta);
+    bpf_trace_printk("after data 0x%x data_end 0x%x  data_meta 0x%x\n", data, data_end, ctx->data_meta);
 #endif
 
     if (data + offset + sizeof(struct _iphdr) > data_end) {
@@ -436,6 +442,9 @@ int ingress_v4(struct xdp_md *ctx) {
         return XDP_PASS;
     }
 
+    // store idx in meta
+    *meta = *val;
+
     #if DEBUG
         bpf_trace_printk("INGRESS ttl exc from 0x%x rttl %d\n", srcip, recvttl);
     #endif
@@ -444,11 +453,22 @@ int ingress_v4(struct xdp_md *ctx) {
 }
 
 int ingress_v6(struct xdp_md *ctx) {
+    int rv = bpf_xdp_adjust_meta(ctx, -4);
+#if DEBUG
+    bpf_trace_printk("adjust meta rv %d\n", rv);
+#endif
+
     void* data = (void*)(long)ctx->data;
     void* data_end = (void*)(long)ctx->data_end;
+
+    int *meta = (void*)ctx->data_meta;
+    if (meta + 1 > data) {
+        return XDP_PASS;
+    }
+
     int offset = NHOFFSET;
 #if DEBUG
-    bpf_trace_printk("after data 0x%x data_end 0x%x  data_meta 0x%x\n", data, data_end, xdp->data_meta);
+    bpf_trace_printk("after data 0x%x data_end 0x%x  data_meta 0x%x\n", data, data_end, ctx->data_meta);
 #endif
 
     if (data + offset + sizeof(struct _ip6hdr) > data_end) {
@@ -514,6 +534,9 @@ int ingress_v6(struct xdp_md *ctx) {
     if ((val = trie.lookup(&origdst)) == NULL) {
         return XDP_PASS;
     }
+
+    // store idx in meta
+    *meta = *val;
 
 #if DEBUG
     bpf_trace_printk("INGRESS ttl exc from 0x%x rttl %d\n", srcip, recvttl);
