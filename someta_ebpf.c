@@ -85,7 +85,8 @@ struct _icmphdr {
     uint8_t     icmp_type;   /* type field */
     uint8_t     icmp_code;   /* code field */
     uint16_t    icmp_cksum;  /* checksum field */
-    uint8_t     reserved[4]; /* 4 bytes reserved */
+    uint16_t    icmp_r1;
+    uint16_t    icmp_r2;
 };
 
 #define IPPROTO_ICMP    1
@@ -118,42 +119,65 @@ struct _icmphdr {
 
 #define MAXDEST     128
 
+#define IP_TTL_OFF offsetof(struct iphdr, ttl)
+#define IP_SRC_OFF offsetof(struct iphdr, saddr)
+#define IP_DST_OFF offsetof(struct iphdr, daddr)
+#define IP_LEN_OFF offsetof(struct iphdr, tot_len)
+#define IP_CSUM_OFF offsetof(struct iphdr, check)
+#define ICMP_SEQ_OFF offsetof(struct icmphdr, icmp_r1)
+#define ICMP_ID_OFF offsetof(struct icmphdr, icmp_r2)
+#define ICMP_CSUM_OFF offsetof(struct icmphdr, icmp_cksum)
+#define ICMP_TYPE_OFF offsetof(struct icmphdr, icmp_type)
+#define TCP_SRC_OFF offsetof(struct tcphdr, source)
+#define TCP_DST_OFF offsetof(struct tcphdr, dest)
+#define TCP_SEQ_OFF offsetof(struct tcphdr, seq)
+#define TCP_ACK_OFF offsetof(struct tcphdr, ack_seq)
+#define TCP_URG_OFF offsetof(struct tcphdr, urg_ptr)
+#define TCP_WIN_OFF offsetof(struct tcphdr, window)
+#define TCP_CSUM_OFF offsetof(struct tcphdr, check)
+
 struct probe_dest {
-    u64     hop_bitmap;
-    u32     sequence;
-    u16     next_hop_to_probe;
-    u16     max_ttl;
-    u64     last_send;
+    u32         hop_bitmap;
+    u32         sequence;
+    u16         next_hop_to_probe;
+    u16         maxttl;
+    u32         pad;
+    u64         last_send;
+    _in6_addr_t dest;
 };
 
 struct sent_info {
     u64         send_time;
     _in6_addr_t dest;
-    u64         out_ttl;
+    u64         outttl;
+    u16         sport; 
+    u16         dport; 
+    u32         pad;
 };
 
 struct latency_sample {
-    u64 sequence;
-    u64 origseq;
-    u64 send;
-    u64 recv;
-    u16 sport;
-    u16 dport;
-    u32 responder;
-    u32 target;
-    u8 outttl;
-    u8 recvttl;
+    u64         sequence;
+    u64         origseq;
+    u64         send;
+    u64         recv;
+    u16         sport;
+    u16         dport;
+    u8          outttl;
+    u8          recvttl;
+    u16         pad;
+    _in6_addr_t responder;
+    _in6_addr_t target;
 };
 
 BPF_PROG_ARRAY(ingress_layer3, 8);
-BPF_PROG_ARRAY(ingress_v4_proto, 255);
-BPF_PROG_ARRAY(ingress_v6_proto, 255);
+BPF_PROG_ARRAY(ingress_v4_proto, 256);
+BPF_PROG_ARRAY(ingress_v6_proto, 256);
 BPF_PROG_ARRAY(egress_layer3, 8);
-BPF_PROG_ARRAY(egress_v4_proto, 255);
-BPF_PROG_ARRAY(egress_v6_proto, 255);
+BPF_PROG_ARRAY(egress_v4_proto, 256);
+BPF_PROG_ARRAY(egress_v6_proto, 256);
 
 BPF_HASH(trie, _in6_addr_t, u64); // key: dest address
-BPF_HISTOGRAM(counters, u64, 255); 
+BPF_HISTOGRAM(counters, u64, 256); 
 BPF_ARRAY(destinfo, struct probe_dest, MAXDEST); // index: value in trie hash
 BPF_HASH(hopinfo, u64, u64); // key: destid | hop
 BPF_HASH(sentinfo, u64, struct sent_info); // key: destid | sequence
@@ -177,7 +201,24 @@ static inline void _update_maxttl(int idx, int ttl) {
 #ifdef DEBUG
         bpf_trace_printk("updated maxttl to %d\n", num_hops);
 #endif
-    pd->max_ttl = num_hops;
+    pd->maxttl = num_hops;
+}
+
+static inline void _decide_seq_ttl(struct probe_dest *pd, u32 *seq, u8 *ttl) {
+    *seq = pd->sequence;
+    pd->sequence++;
+    
+#pragma unroll
+    for (u16 i = 0; i < 8; i++) {
+        u16 hop = (pd->next_hop_to_probe + i) % pd->maxttl;
+        if (((pd->hop_bitmap << hop) & 0x1) == 0x1) {
+            *ttl = (u8)(hop + 1);
+            pd->next_hop_to_probe = (hop + 1) % pd->maxttl;
+            return;
+        }
+    }
+    *ttl = (u8)((pd->next_hop_to_probe % pd->maxttl) + 1);
+    pd->next_hop_to_probe = (pd->next_hop_to_probe + 1) % pd->maxttl;
 }
 
 static inline int _should_probe_dest(int idx) {
@@ -197,6 +238,122 @@ static inline int _should_probe_dest(int idx) {
 int egress_v4_icmp(struct __sk_buff *ctx) {
 #if DEBUG
     bpf_trace_printk("egress v4 icmp mark %d\n", ctx->mark);
+#endif
+    int idx = ctx->mark;
+    struct probe_dest *pd = destinfo.lookup(&idx);
+    if (pd == NULL) {
+        return;
+    }
+
+    //
+    // boilerplate to get a pointer to icmphdr for cloning and 
+    // probe generation
+    //
+    int offset = NHOFFSET;
+    void* data = (void*)(long)ctx->data;
+    void* data_end = (void*)(long)ctx->data_end;
+    if (data + offset + sizeof(struct _iphdr) > data_end) {
+        return TC_ACT_OK;
+    }
+    struct _iphdr *iph = (struct _iphdr*)(data + offset);
+    offset = offset + ((iph->verihl&0x0f) << 2);
+    struct _icmphdr *icmph = (struct _icmphdr*)(data + offset);
+    if (data + offset + sizeof(struct _icmphdr) > data_end) {
+        return TC_ACT_OK;
+    }
+    if (icmp->icmp_type != ICMP_ECHO_REQUEST) {
+        return TC_ACT_OK;
+    }
+
+    /*
+     * decide what TTL to use in probe
+     */
+    u64 now = bpf_ktime_get_ns();
+    u32 sequence = 0;
+    u8 newttl = 0;
+    u32 destaddr = load_word(ctx, NHOFFSET + IP_DST_OFF);
+    pd->last_send = now;
+    _decide_seq_ttl(pd, &sequence, &newttl);
+    
+#if DEBUG
+    bpf_trace_printk("outgoing seq %lu\n", sequence);
+#endif
+    //
+    // FIXME: update structures for tracking outgoing probes
+    //
+    // struct sent_info: send_time, dest, out_ttl
+    // hashed on: idx|sequence
+    //
+    // FIXME: insert into hash
+    //
+    u64 sentkey = (u64)idx << 32 | (u64)sequence;
+    _in6_addr_t destaddr6 = { destaddr, 0, 0, 0 };
+    u16 sport = load_half(ctx, offset + ICMP_TYPE_OFF);
+    u16 dport = load_half(ctx, offset + ICMP_CSUM_OFF);
+    struct sent_info si = {
+        .send_time = now,
+        .dest = destaddr6,
+        .outttl = (u64)newttl,
+        .sport = sport,
+        .dport = dport,
+    };
+    sentinfo.update(&sentkey, &si);
+
+    // clone and redirect the original pkt out the intended interface
+    int rv = bpf_clone_redirect(ctx, IFINDEX, 0);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("bpf clone ifidx %d failed: %d\n", IFINDEX, rv);
+#endif
+        // if clone fails, just let the packet pass w/o trying to do any modifications below
+        return TC_ACT_OK;
+    }
+
+    u16 old_ttl_proto = load_half(ctx, NHOFFSET + IP_TTL_OFF);
+    u16 new_ttl_proto = htons(((u16)newttl) << 8 | IPPROTO_ICMP);
+
+    // replace the IP checksum
+    rv = bpf_l3_csum_replace(ctx, NHOFFSET + IP_CSUM_OFF, htons(old_ttl_proto), new_ttl_proto, 2);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("failed to replace csum icmp path\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+
+    // rewrite new IP ttl
+    rv = bpf_skb_store_bytes(ctx, NHOFFSET + IP_TTL_OFF, &new_ttl_proto, sizeof(new_ttl_proto), 0);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("failed to store new ttl/proto icmp path\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+
+    // rewrite seq in ICMP hdr
+    u16 oldseq = load_half(ctx, offset + ICMP_SEQ_OFF);
+    u16 newseq = sequence;
+    rv = bpf_skb_store_bytes(ctx, offset + ICMP_SEQ_OFF, &icmpseq, sizeof(icmpseq));
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("failed to store new icmp seq\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+
+    // fixup ICMP checksum
+    u16 oldcsum = load_half(ctx, offset + ICMP_CSUM_OFF);
+    u16 newcsum = oldcsum - (newseq - oldseq); // FIXME: maybe right; tested w/switchyard
+    rv = bpf_skb_store_bytes(ctx, offset + ICMP_CSUM_OFF, &newcsum, sizeof(newcsum));
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("failed to store new icmp csum\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+
+#if DEBUG
+    bpf_trace_printk("emitting probe %lu\n", sequence);
 #endif
     return TC_ACT_OK;
 }
@@ -220,7 +377,7 @@ int egress_v4(struct __sk_buff *ctx) {
     void* data = (void*)(long)ctx->data;
     void* data_end = (void*)(long)ctx->data_end;
     if (data + offset + sizeof(struct _iphdr) > data_end) {
-        return XDP_PASS;
+        return TC_ACT_OK;
     }
     struct _iphdr *iph = (struct _iphdr*)(data + offset);
     _in6_addr_t dest = { iph->daddr, 0, 0, 0 };
@@ -277,7 +434,7 @@ int egress_v6(struct __sk_buff *ctx) {
     void* data = (void*)(long)ctx->data;
     void* data_end = (void*)(long)ctx->data_end;
     if (data + offset + sizeof(struct _ip6hdr) > data_end) {
-        return XDP_PASS;
+        return TC_ACT_OK;
     }
     struct _ip6hdr *iph = (struct _ip6hdr*)(data + offset);
     _in6_addr_t dest = iph->daddr;
@@ -311,6 +468,13 @@ int egress_path(struct __sk_buff *ctx) {
     void* data = (void*)(long)ctx->data;
     void* data_end = (void*)(long)ctx->data_end;
 
+    if (ctx->mark != 0) {
+#if DEBUG
+        bpf_trace_printk("ignoring packet that we've already cloned\n");
+#endif
+        return TC_ACT_OK;
+    }
+
     int ipproto = 0;
 #if TUNNEL == 4
     ipproto = 4;
@@ -318,7 +482,7 @@ int egress_path(struct __sk_buff *ctx) {
     ipproto = 6;
 #else
     if (data + sizeof(struct _ethhdr) > data_end) {
-        return XDP_PASS;
+        return TC_ACT_OK;
     }
     struct _ethhdr *eth = (struct _ethhdr *)data;
     if (eth->ether_type == htons(ETHERTYPE_IP)) {
@@ -445,9 +609,11 @@ int ingress_v4(struct xdp_md *ctx) {
     // store idx in meta
     *meta = *val;
 
-    #if DEBUG
-        bpf_trace_printk("INGRESS ttl exc from 0x%x rttl %d\n", srcip, recvttl);
-    #endif
+#if DEBUG
+    bpf_trace_printk("INGRESS ttl exc from 0x%x rttl %d\n", srcip, recvttl);
+#endif
+
+    // FIXME: extract info to match with an outgoing probe
 
     return XDP_PASS;
 }
@@ -541,7 +707,6 @@ int ingress_v6(struct xdp_md *ctx) {
 #if DEBUG
     bpf_trace_printk("INGRESS ttl exc from 0x%x rttl %d\n", srcip, recvttl);
 #endif
-
 
     return XDP_PASS;
 }

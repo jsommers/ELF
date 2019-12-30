@@ -19,23 +19,32 @@ class _u(ctypes.Union):
 class in6_addr(ctypes.Structure):
     _fields_ = [('_u', _u)]
 
-def address_interest_v4(table, a):
+def address_interest_v4(table, a, dinfo):
     xaddr = in6_addr()
     ip4 = ipaddress.ip_address(a)
     pstr = ip4.packed
+    idx = len(table) + 1
     for i in range(len(pstr)):
         xaddr._u._addr8[i] = pstr[i]
+        dinfo[idx]._u._addr8[i] = pstr[i]
     for i in range(4, 16):
         xaddr._u._addr8[i] = 0
-    table[xaddr] = ctypes.c_uint64(len(table))
+        dinfo[idx].dest._u._addr[i] = 0
+    table[xaddr] = ctypes.c_uint64(idx)
+    dinfo[idx].hop_bitmap = 0xffffffff
+    dinfo[idx].max_ttl = 16
 
-def address_interest_v6(table, a):
+def address_interest_v6(table, a, dinfo):
     xaddr = in6_addr()
     ip6 = ipaddress.ip_address(a)
     pstr = ip6.packed
+    idx = len(table) + 1
     for i in range(len(pstr)):
         xaddr._u._addr8[i] = pstr[i]
-    table[xaddr] = ctypes.c_uint64(len(table))
+        dinfo[idx]._u._addr8[i] = pstr[i]
+    table[xaddr] = ctypes.c_uint64(idx)
+    dinfo[idx].hop_bitmap = 0xffffffff
+    dinfo[idx].max_ttl = 16
 
 def _set_bpf_jumptable(bpf, tablename, idx, fnname, progtype):
     tail_fn = bpf.load_func(fnname, progtype)
@@ -54,6 +63,7 @@ def main(args):
     logging.info("ifindex for {} is {}".format(args.interface, idx))
 
     cflags = ['-DMIN_PROBE=1000000'] # 1 millisec
+    cflags.append('-DIFINDEX={}'.format(idx))
     if args.encapsulation == 'ipinip':
         cflags.append('-DTUNNEL=4')
         cflags.append('-DNHOFFSET=20')
@@ -78,16 +88,17 @@ def main(args):
 
     # how to inject something into the table
     table = b['trie']
+    destinfo = b['destinfo']
 
-    address_interest_v4(table, '149.43.152.10')
-    address_interest_v4(table, '149.43.80.25')
-    address_interest_v6(table, '2604:6000:141a:e3:8d2:dcb2:edd4:d60d')
+    address_interest_v4(table, '149.43.152.10', destinfo)
+    address_interest_v4(table, '149.43.80.25', destinfo)
+    address_interest_v6(table, '2604:6000:141a:e3:8d2:dcb2:edd4:d60d', destinfo)
     for addr in args.addresses:
         ipaddr = ipaddress.ip_address(addr)
         if ipaddr.version == 4:
-            address_interest_v4(table, addr)
+            address_interest_v4(table, addr, destinfo)
         else:
-            address_interest_v6(table, addr)
+            address_interest_v6(table, addr, destinfo)
 
     egress_fn = b.load_func('egress_path', BPF.SCHED_CLS)
     ingress_fn = b.load_func("ingress_path", BPF.XDP)
