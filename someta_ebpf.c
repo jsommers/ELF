@@ -85,8 +85,7 @@ struct _icmphdr {
     uint8_t     icmp_type;   /* type field */
     uint8_t     icmp_code;   /* code field */
     uint16_t    icmp_cksum;  /* checksum field */
-    uint16_t    icmp_r1;
-    uint16_t    icmp_r2;
+    uint8_t     icmp_reserved[4];
 };
 
 #define IPPROTO_ICMP    1
@@ -102,9 +101,9 @@ struct _icmphdr {
 #define ICMP6_ECHO_REQUEST          128
 #define ICMP6_ECHO_REPLY            129
 
-#define ICMP_ECHOREPLY          0       /* Echo Reply                   */
+#define ICMP_ECHO_REPLY         0       /* Echo Reply                   */
 #define ICMP_DEST_UNREACH       3       /* Destination Unreachable      */
-#define ICMP_ECHO               8       /* Echo Request                 */
+#define ICMP_ECHO_REQUEST       8       /* Echo Request                 */
 #define ICMP_TIME_EXCEEDED      11      /* Time Exceeded                */
 
 #ifndef TC_ACT_OK
@@ -119,22 +118,22 @@ struct _icmphdr {
 
 #define MAXDEST     128
 
-#define IP_TTL_OFF offsetof(struct iphdr, ttl)
-#define IP_SRC_OFF offsetof(struct iphdr, saddr)
-#define IP_DST_OFF offsetof(struct iphdr, daddr)
-#define IP_LEN_OFF offsetof(struct iphdr, tot_len)
-#define IP_CSUM_OFF offsetof(struct iphdr, check)
-#define ICMP_SEQ_OFF offsetof(struct icmphdr, icmp_r1)
-#define ICMP_ID_OFF offsetof(struct icmphdr, icmp_r2)
-#define ICMP_CSUM_OFF offsetof(struct icmphdr, icmp_cksum)
-#define ICMP_TYPE_OFF offsetof(struct icmphdr, icmp_type)
-#define TCP_SRC_OFF offsetof(struct tcphdr, source)
-#define TCP_DST_OFF offsetof(struct tcphdr, dest)
-#define TCP_SEQ_OFF offsetof(struct tcphdr, seq)
-#define TCP_ACK_OFF offsetof(struct tcphdr, ack_seq)
-#define TCP_URG_OFF offsetof(struct tcphdr, urg_ptr)
-#define TCP_WIN_OFF offsetof(struct tcphdr, window)
-#define TCP_CSUM_OFF offsetof(struct tcphdr, check)
+#define IP_TTL_OFF offsetof(struct _iphdr, ttl)
+#define IP_SRC_OFF offsetof(struct _iphdr, saddr)
+#define IP_DST_OFF offsetof(struct _iphdr, daddr)
+#define IP_LEN_OFF offsetof(struct _iphdr, tot_len)
+#define IP_CSUM_OFF offsetof(struct _iphdr, check)
+#define ICMP_CSUM_OFF offsetof(struct _icmphdr, icmp_cksum)
+#define ICMP_TYPE_OFF offsetof(struct _icmphdr, icmp_type)
+#define ICMP_ID_OFF offsetof(struct _icmphdr, icmp_reserved[0])
+#define ICMP_SEQ_OFF offsetof(struct _icmphdr, icmp_reserved[2])
+#define TCP_SRC_OFF offsetof(struct _tcphdr, source)
+#define TCP_DST_OFF offsetof(struct _tcphdr, dest)
+#define TCP_SEQ_OFF offsetof(struct _tcphdr, seq)
+#define TCP_ACK_OFF offsetof(struct _tcphdr, ack_seq)
+#define TCP_URG_OFF offsetof(struct _tcphdr, urg_ptr)
+#define TCP_WIN_OFF offsetof(struct _tcphdr, window)
+#define TCP_CSUM_OFF offsetof(struct _tcphdr, check)
 
 struct probe_dest {
     u32         hop_bitmap;
@@ -242,7 +241,7 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
     int idx = ctx->mark;
     struct probe_dest *pd = destinfo.lookup(&idx);
     if (pd == NULL) {
-        return;
+        return TC_ACT_OK;
     }
 
     //
@@ -261,7 +260,7 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
     if (data + offset + sizeof(struct _icmphdr) > data_end) {
         return TC_ACT_OK;
     }
-    if (icmp->icmp_type != ICMP_ECHO_REQUEST) {
+    if (icmph->icmp_type != ICMP_ECHO_REQUEST) {
         return TC_ACT_OK;
     }
 
@@ -333,7 +332,7 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
     // rewrite seq in ICMP hdr
     u16 oldseq = load_half(ctx, offset + ICMP_SEQ_OFF);
     u16 newseq = sequence;
-    rv = bpf_skb_store_bytes(ctx, offset + ICMP_SEQ_OFF, &icmpseq, sizeof(icmpseq));
+    rv = bpf_skb_store_bytes(ctx, offset + ICMP_SEQ_OFF, &newseq, sizeof(newseq), 0);
     if (rv < 0) {
 #if DEBUG
         bpf_trace_printk("failed to store new icmp seq\n");
@@ -344,7 +343,7 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
     // fixup ICMP checksum
     u16 oldcsum = load_half(ctx, offset + ICMP_CSUM_OFF);
     u16 newcsum = oldcsum - (newseq - oldseq); // FIXME: maybe right; tested w/switchyard
-    rv = bpf_skb_store_bytes(ctx, offset + ICMP_CSUM_OFF, &newcsum, sizeof(newcsum));
+    rv = bpf_skb_store_bytes(ctx, offset + ICMP_CSUM_OFF, &newcsum, sizeof(newcsum), 0);
     if (rv < 0) {
 #if DEBUG
         bpf_trace_printk("failed to store new icmp csum\n");
@@ -530,7 +529,7 @@ int ingress_v4(struct xdp_md *ctx) {
     void* data = (void*)(long)ctx->data;
     void* data_end = (void*)(long)ctx->data_end;
 
-    int *meta = (void*)ctx->data_meta;
+    int *meta = (int*)ctx->data_meta;
     if (meta + 1 > data) {
         return XDP_PASS;
     }
@@ -583,7 +582,7 @@ int ingress_v4(struct xdp_md *ctx) {
     // FIXME: not doing this yet, but can use this len to determine
     // whether there are any extension headers a la rfc4884 
     // (and rfc4950 extensions in particular)
-    int inner_pktlen = icmp->reserved[1];
+    int inner_pktlen = ntohs(icmp->icmp_reserved[1]);
     if (inner_pktlen == 0) {
         inner_pktlen = sizeof(struct _iphdr) + 8;
     }
@@ -678,7 +677,7 @@ int ingress_v6(struct xdp_md *ctx) {
     // FIXME: not doing this yet, but can use this len to determine
     // whether there are any extension headers a la rfc4884 
     // (and rfc4950 extensions in particular)
-    int inner_pktlen = icmp->reserved[1];
+    int inner_pktlen = ntohs(icmp->icmp_reserved[1]);
     if (inner_pktlen == 0) {
         inner_pktlen = sizeof(struct _ip6hdr) + 8;
     }

@@ -26,10 +26,10 @@ def address_interest_v4(table, a, dinfo):
     idx = len(table) + 1
     for i in range(len(pstr)):
         xaddr._u._addr8[i] = pstr[i]
-        dinfo[idx]._u._addr8[i] = pstr[i]
+        dinfo[idx].dest._u._addr8[i] = pstr[i]
     for i in range(4, 16):
         xaddr._u._addr8[i] = 0
-        dinfo[idx].dest._u._addr[i] = 0
+        dinfo[idx].dest._u._addr8[i] = 0
     table[xaddr] = ctypes.c_uint64(idx)
     dinfo[idx].hop_bitmap = 0xffffffff
     dinfo[idx].max_ttl = 16
@@ -41,7 +41,7 @@ def address_interest_v6(table, a, dinfo):
     idx = len(table) + 1
     for i in range(len(pstr)):
         xaddr._u._addr8[i] = pstr[i]
-        dinfo[idx]._u._addr8[i] = pstr[i]
+        dinfo[idx].dest._u._addr8[i] = pstr[i]
     table[xaddr] = ctypes.c_uint64(idx)
     dinfo[idx].hop_bitmap = 0xffffffff
     dinfo[idx].max_ttl = 16
@@ -62,7 +62,7 @@ def main(args):
         sys.exit(-1)
     logging.info("ifindex for {} is {}".format(args.interface, idx))
 
-    cflags = ['-DMIN_PROBE=1000000'] # 1 millisec
+    cflags = ['-Wall', '-DMIN_PROBE=1000000'] # 1 millisec
     cflags.append('-DIFINDEX={}'.format(idx))
     if args.encapsulation == 'ipinip':
         cflags.append('-DTUNNEL=4')
