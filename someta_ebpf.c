@@ -331,7 +331,7 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
 
     // rewrite seq in ICMP hdr
     u16 oldseq = load_half(ctx, offset + ICMP_SEQ_OFF);
-    u16 newseq = sequence;
+    u16 newseq = htons(sequence);
     rv = bpf_skb_store_bytes(ctx, offset + ICMP_SEQ_OFF, &newseq, sizeof(newseq), 0);
     if (rv < 0) {
 #if DEBUG
@@ -339,10 +339,12 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
 #endif
         return TC_ACT_SHOT;
     }
+    newseq = ntohs(newseq);
 
     // fixup ICMP checksum
     u16 oldcsum = load_half(ctx, offset + ICMP_CSUM_OFF);
-    u16 newcsum = oldcsum - (newseq - oldseq); // FIXME: maybe right; tested w/switchyard
+    u16 newcsum = oldcsum - (newseq - oldseq); 
+    newcsum = htons(newcsum);
     rv = bpf_skb_store_bytes(ctx, offset + ICMP_CSUM_OFF, &newcsum, sizeof(newcsum), 0);
     if (rv < 0) {
 #if DEBUG

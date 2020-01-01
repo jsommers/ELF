@@ -19,6 +19,18 @@ class _u(ctypes.Union):
 class in6_addr(ctypes.Structure):
     _fields_ = [('_u', _u)]
 
+
+def to_ipaddr(obj):
+    if obj._u._addr32[3] == 0:
+        # ip4
+        return ipaddress.IPv4Address(obj._u._addr32[0])
+    else:
+        i = obj._u._addr32[0]
+        for j in range(1, 4):
+            i = i << 32 | obj._u._addr32[j]
+        return ipaddress.IPv6Address(i)
+
+
 def address_interest_v4(table, a, dinfo):
     xaddr = in6_addr()
     ip4 = ipaddress.ip_address(a)
@@ -52,7 +64,8 @@ def _set_bpf_jumptable(bpf, tablename, idx, fnname, progtype):
     prog_array[ctypes.c_int(idx)] = ctypes.c_int(tail_fn.fd)
 
 def main(args):
-    logging.basicConfig(level=logging.DEBUG)
+    # logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)  %(message)s')
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)s %(message)s')
     ip = pyroute2.IPRoute()
     ipdb = pyroute2.IPDB(nl=ip)
     try:
@@ -152,6 +165,13 @@ def main(args):
             for i in range(4):
                 print("{:02x}".format(k._u._addr8[i]), end='', sep='')
         print(v)
+    for k,v in b['sentinfo'].items():
+        idx = k.value >> 32 & 0xffffffff
+        seq = k.value & 0xffffffff
+        print(idx, seq, v.send_time, to_ipaddr(v.dest), v.outttl, v.sport, v.dport)
+
+    #for k,v in b['results'].items():
+    #    print(k, v)
 
     if args.debug:
         logging.debug("kernel debug messages: ")
@@ -160,7 +180,7 @@ def main(args):
                 task,pid,cpu,flags,ts,msg = b.trace_fields(nonblocking=True)
                 if task is None:
                     break
-                logging.debug("{} {} {} {} {} {}".format(task,pid,cpu,flags,ts,msg))
+                logging.debug("ktime {} cpu{} {} flags:{} {}".format(ts, cpu, task.decode(errors='ignore'), flags.decode(errors='ignore'), msg.decode(errors='ignore')).replace('%',''))
             except ValueError:   
                 break
 
