@@ -2,12 +2,16 @@ import argparse
 import ctypes
 import ipaddress
 import logging
+import socket
 import sys
 import time
 
 import bcc
 from bcc import BPF
 import pyroute2
+
+RESULTS_IDX = 256
+MAX_RESULTS = 8192
 
 class _u(ctypes.Union):
     _fields_ = [
@@ -23,11 +27,11 @@ class in6_addr(ctypes.Structure):
 def to_ipaddr(obj):
     if obj._u._addr32[3] == 0:
         # ip4
-        return ipaddress.IPv4Address(obj._u._addr32[0])
+        return ipaddress.IPv4Address(socket.ntohl(obj._u._addr32[0]))
     else:
         i = obj._u._addr32[0]
         for j in range(1, 4):
-            i = i << 32 | obj._u._addr32[j]
+            i = i << 32 | socket.ntohl(obj._u._addr32[j])
         return ipaddress.IPv6Address(i)
 
 
@@ -140,16 +144,19 @@ def main(args):
         _set_bpf_jumptable(b, 'egress_v6_proto', idx, fnname, BPF.SCHED_CLS)
 
     logging.info("start")
-    time.sleep(2)
+    time.sleep(5)
     logging.info("ok - done")
 
     logging.info("Waiting 0.5s for any stray responses")
     time.sleep(0.5)
     logging.info("removing filters and shutting down")
 
+    num_results = 0
     print('counters')
     for k,v in b['counters'].items():
         print("\t",k,v)
+        if k.value == RESULTS_IDX:
+            num_results = v.value
 
     print('trie')
     for k,v in b['trie'].items():
@@ -165,13 +172,15 @@ def main(args):
             for i in range(4):
                 print("{:02x}".format(k._u._addr8[i]), end='', sep='')
         print(v)
+
     for k,v in b['sentinfo'].items():
         idx = k.value >> 32 & 0xffffffff
         seq = k.value & 0xffffffff
         print(idx, seq, v.send_time, to_ipaddr(v.dest), v.outttl, v.sport, v.dport)
 
-    #for k,v in b['results'].items():
-    #    print(k, v)
+    for resultidx in range(num_results):
+        res = b['results'][resultidx]
+        print(resultidx, res.sequence, res.origseq, res.recv-res.send, res.send, res.recv, res.sport, res.dport, res.outttl, res.recvttl, to_ipaddr(res.responder), to_ipaddr(res.target))
 
     if args.debug:
         logging.debug("kernel debug messages: ")
