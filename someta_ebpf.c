@@ -154,7 +154,9 @@ struct sent_info {
     u64         outttl;
     u16         sport; 
     u16         dport; 
-    u32         origseq;
+    u16         origseq;
+    u8          protocol;
+    u8          pad;
 };
 
 struct latency_sample {
@@ -166,7 +168,8 @@ struct latency_sample {
     u16         dport;
     u8          outttl;
     u8          recvttl;
-    u16         pad;
+    u8          protocol;
+    u8          pad;
     _in6_addr_t responder;
     _in6_addr_t target;
 };
@@ -290,6 +293,7 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
         .sport = sport,
         .dport = dport,
         .origseq = origseq,
+        .protocol = 1,
     };
     sentinfo.update(&sentkey, &si);
 
@@ -571,6 +575,7 @@ int ingress_v4(struct xdp_md *ctx) {
 
     offset = offset + sizeof(struct _icmphdr);
     // save srcip and ttl from outer IP header
+    uint32_t srcip = iph->saddr;
     uint8_t recvttl = iph->ttl;
     if (data + offset + sizeof(struct _iphdr) > data_end) {
         return XDP_PASS;
@@ -652,6 +657,7 @@ int ingress_v4(struct xdp_md *ctx) {
     latsamp->sport = si->sport;
     latsamp->dport = si->dport;
     latsamp->origseq = si->origseq;
+    latsamp->protocol = iph->protocol;
 
     sentinfo.delete(&sentkey);      
 #if DEBUG
@@ -713,6 +719,7 @@ int ingress_v6(struct xdp_md *ctx) {
 
     offset = offset + sizeof(struct _icmphdr);
     // save srcip and ttl from outer IP header
+    _in6_addr_t srcip = iph->saddr;
     uint8_t recvttl = iph->hop_limit;
     if (data + offset + sizeof(struct _ip6hdr) > data_end) {
         return XDP_PASS;
@@ -729,7 +736,7 @@ int ingress_v6(struct xdp_md *ctx) {
     }
 
 #if DEBUG
-    bpf_trace_printk("INGRESS ttl exc from 0x%x rttl %d\n", srcip, recvttl);
+    bpf_trace_printk("INGRESS ttl exc from 0x%x rttl %d\n", srcip._u._addr32[0], recvttl);
 #endif
 
     return XDP_PASS;

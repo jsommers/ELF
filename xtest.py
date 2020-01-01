@@ -1,4 +1,5 @@
 import argparse
+import json
 import ctypes
 import ipaddress
 import logging
@@ -68,8 +69,12 @@ def _set_bpf_jumptable(bpf, tablename, idx, fnname, progtype):
     prog_array[ctypes.c_int(idx)] = ctypes.c_int(tail_fn.fd)
 
 def main(args):
-    # logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)  %(message)s')
-    logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)s %(message)s')
+    metadata = {}
+    if args.logfile:
+        logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)s %(message)s', filename=args.filebase + '.log')
+    else:
+        logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)s %(message)s')
+
     ip = pyroute2.IPRoute()
     ipdb = pyroute2.IPDB(nl=ip)
     try:
@@ -107,15 +112,22 @@ def main(args):
     table = b['trie']
     destinfo = b['destinfo']
 
-    address_interest_v4(table, '149.43.152.10', destinfo)
-    address_interest_v4(table, '149.43.80.25', destinfo)
-    address_interest_v6(table, '2604:6000:141a:e3:8d2:dcb2:edd4:d60d', destinfo)
-    for addr in args.addresses:
-        ipaddr = ipaddress.ip_address(addr)
-        if ipaddr.version == 4:
-            address_interest_v4(table, addr, destinfo)
-        else:
-            address_interest_v6(table, addr, destinfo)
+    #address_interest_v4(table, '149.43.152.10', destinfo)
+    #address_interest_v4(table, '149.43.80.25', destinfo)
+    #address_interest_v6(table, '2604:6000:141a:e3:8d2:dcb2:edd4:d60d', destinfo)
+    metadata['timestamp'] = time.asctime()
+    metadata['interface'] = args.interface
+    metadata['interface_idx'] = idx
+    metadata['hosts'] = {}
+    for name in args.addresses:
+        for family,_,_,_,sockaddr in socket.getaddrinfo(name, None):
+            addr = sockaddr[0]
+            ipaddr = ipaddress.ip_address(addr)
+            metadata['hosts'][str(ipaddr)] = name
+            if ipaddr.version == 4:
+                address_interest_v4(table, addr, destinfo)
+            else:
+                address_interest_v6(table, addr, destinfo)
 
     egress_fn = b.load_func('egress_path', BPF.SCHED_CLS)
     ingress_fn = b.load_func("ingress_path", BPF.XDP)
@@ -144,19 +156,41 @@ def main(args):
         _set_bpf_jumptable(b, 'egress_v6_proto', idx, fnname, BPF.SCHED_CLS)
 
     logging.info("start")
-    time.sleep(5)
+    metadata['results'] = []
+    resultidx = 0
+    while True:
+        try:
+            time.sleep(1)
+            resultval = -1
+            for k,v in b['counters'].items():
+                if k.value == RESULTS_IDX:
+                    resultval = v.value
+            if resultval > -1:
+                while resultidx != resultval:
+                    res = b['results'][resultidx]
+                    print(resultidx, res.sequence, res.origseq, res.recv-res.send, res.send, res.recv, res.sport, res.dport, res.outttl, res.recvttl, to_ipaddr(res.responder), to_ipaddr(res.target), res.protocol)
+                    d = {'seq':res.sequence, 'origseq':res.origseq, 'latency':(res.recv-res.send), 'sendtime':res.send, 'recvtime':res.recv, 'dest':str(to_ipaddr(res.target)), 'responder':str(to_ipaddr(res.responder)), 'outttl':res.outttl, 'recvttl':res.recvttl, 'sport':res.sport, 'dport':res.dport, 'protocol':res.protocol}
+                    metadata['results'].append(d)
+                    resultidx += 1
+                    if resultidx == MAX_RESULTS:
+                        resultidx = 0
+
+        except KeyboardInterrupt:
+            break
+
+            
     logging.info("ok - done")
 
     logging.info("Waiting 0.5s for any stray responses")
     time.sleep(0.5)
     logging.info("removing filters and shutting down")
 
-    num_results = 0
     print('counters')
+    resultval = -1
     for k,v in b['counters'].items():
         print("\t",k,v)
         if k.value == RESULTS_IDX:
-            num_results = v.value
+            resultval = v.value
 
     print('trie')
     for k,v in b['trie'].items():
@@ -176,11 +210,18 @@ def main(args):
     for k,v in b['sentinfo'].items():
         idx = k.value >> 32 & 0xffffffff
         seq = k.value & 0xffffffff
-        print(idx, seq, v.send_time, to_ipaddr(v.dest), v.outttl, v.sport, v.dport)
+        print(idx, seq, v.origseq, v.send_time, to_ipaddr(v.dest), v.outttl, v.sport, v.dport)
+        d = {'seq':seq, 'origseq':v.origseq, 'sendtime':v.send_time, 'dest':str(to_ipaddr(v.dest)), 'outttl':v.outttl, 'sport':v.sport, 'dport':v.dport, 'recvtime':0, 'responder':'', 'recvttl':-1, 'latency':-1, 'protocol':v.protocol}
+        metadata['results'].append(d)
 
-    for resultidx in range(num_results):
+    while resultidx != resultval:
         res = b['results'][resultidx]
-        print(resultidx, res.sequence, res.origseq, res.recv-res.send, res.send, res.recv, res.sport, res.dport, res.outttl, res.recvttl, to_ipaddr(res.responder), to_ipaddr(res.target))
+        print(resultidx, res.sequence, res.origseq, res.recv-res.send, res.send, res.recv, res.sport, res.dport, res.outttl, res.recvttl, to_ipaddr(res.responder), to_ipaddr(res.target), res.protocol)
+        d = {'seq':res.sequence, 'origseq':res.origseq, 'latency':(res.recv-res.send), 'sendtime':res.send, 'recvtime':res.recv, 'dest':str(to_ipaddr(res.target)), 'responder':str(to_ipaddr(res.responder)), 'outttl':res.outttl, 'recvttl':res.recvttl, 'sport':res.sport, 'dport':res.dport, 'protocol':res.protocol}
+        metadata['results'].append(d)
+        resultidx += 1
+        if resultidx == MAX_RESULTS:
+            resultidx = 0
 
     if args.debug:
         logging.debug("kernel debug messages: ")
@@ -192,6 +233,9 @@ def main(args):
                 logging.debug("ktime {} cpu{} {} flags:{} {}".format(ts, cpu, task.decode(errors='ignore'), flags.decode(errors='ignore'), msg.decode(errors='ignore')).replace('%',''))
             except ValueError:   
                 break
+
+    with open("{}_meta.json".format(args.filebase), 'w') as outfile:
+        json.dump(metadata, outfile)
 
     try:
         b.remove_xdp(args.interface)
@@ -207,6 +251,8 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument('-l', '--logfile', default=False, action='store_true', help='Turn on logfile output')
+    parser.add_argument('-f', '--filebase', default='ebpf_probe', help='Configure base name for log and data output files')
     parser.add_argument('-d', '--debug', default=False, action='store_true', help='Turn on debug logging')
     parser.add_argument('-i', '--interface', required=True, type=str, help='Interface/device to use')
     parser.add_argument('-e', '--encapsulation', choices=('ethernet', 'ipinip', 'ip6inip'), default='ethernet', help='How packets are encapsulated on the wire')
