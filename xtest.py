@@ -129,7 +129,7 @@ def main(args):
     # set up jump tables for v4/v6 processing on ingress + egress
     for idx,fnname in [(4,'ingress_v4'), (6, 'ingress_v6')]:
         _set_bpf_jumptable(b, 'ingress_layer3', idx, fnname, BPF.XDP)
-        
+
     for idx,fnname in [(4,'egress_v4'), (6, 'egress_v6')]:
         _set_bpf_jumptable(b, 'egress_layer3', idx, fnname, BPF.SCHED_CLS)
 

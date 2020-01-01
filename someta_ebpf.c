@@ -129,11 +129,12 @@ struct _icmphdr {
 #define ICMP_SEQ_OFF offsetof(struct _icmphdr, icmp_reserved[2])
 #define TCP_SRC_OFF offsetof(struct _tcphdr, source)
 #define TCP_DST_OFF offsetof(struct _tcphdr, dest)
-#define TCP_SEQ_OFF offsetof(struct _tcphdr, seq)
+#define TCP_SEQ_OFF offsetof(struct _tcphdr, th_seq)
 #define TCP_ACK_OFF offsetof(struct _tcphdr, ack_seq)
 #define TCP_URG_OFF offsetof(struct _tcphdr, urg_ptr)
 #define TCP_WIN_OFF offsetof(struct _tcphdr, window)
 #define TCP_CSUM_OFF offsetof(struct _tcphdr, check)
+#define UDP_CSUM_OFF offsetof(struct _udphdr, uh_sum)
 
 struct probe_dest {
     u32         hop_bitmap;
@@ -169,8 +170,6 @@ struct latency_sample {
 };
 
 BPF_PROG_ARRAY(ingress_layer3, 8);
-BPF_PROG_ARRAY(ingress_v4_proto, 256);
-BPF_PROG_ARRAY(ingress_v6_proto, 256);
 BPF_PROG_ARRAY(egress_layer3, 8);
 BPF_PROG_ARRAY(egress_v4_proto, 256);
 BPF_PROG_ARRAY(egress_v6_proto, 256);
@@ -178,7 +177,6 @@ BPF_PROG_ARRAY(egress_v6_proto, 256);
 BPF_HASH(trie, _in6_addr_t, u64); // key: dest address
 BPF_HISTOGRAM(counters, u64, 256); 
 BPF_ARRAY(destinfo, struct probe_dest, MAXDEST); // index: value in trie hash
-BPF_HASH(hopinfo, u64, u64); // key: destid | hop
 BPF_HASH(sentinfo, u64, struct sent_info); // key: destid | sequence
 BPF_ARRAY(results, struct latency_sample); // key: index 0 in counters
 
@@ -264,9 +262,7 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
         return TC_ACT_OK;
     }
 
-    /*
-     * decide what TTL to use in probe
-     */
+    // decide what TTL to use in probe
     u64 now = bpf_ktime_get_ns();
     u32 sequence = 0;
     u8 newttl = 0;
@@ -277,14 +273,9 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
 #if DEBUG
     bpf_trace_printk("outgoing seq %lu\n", sequence);
 #endif
-    //
-    // FIXME: update structures for tracking outgoing probes
-    //
-    // struct sent_info: send_time, dest, out_ttl
+
+    // save info about outgoing probe into hash
     // hashed on: idx|sequence
-    //
-    // FIXME: insert into hash
-    //
     u64 sentkey = (u64)idx << 32 | (u64)sequence;
     _in6_addr_t destaddr6 = { destaddr, 0, 0, 0 };
     u16 sport = load_half(ctx, offset + ICMP_TYPE_OFF);
@@ -606,17 +597,34 @@ int ingress_v4(struct xdp_md *ctx) {
     if ((val = trie.lookup(&origdst)) == NULL) {
         return XDP_PASS;
     }
+    offset = offset + sizeof(struct _iphdr);
 
     // store idx in meta
     *meta = *val;
 
 #if DEBUG
-    bpf_trace_printk("INGRESS ttl exc from 0x%x rttl %d\n", srcip, recvttl);
+    bpf_trace_printk("INGRESS ttl exc from 0x%x rttl %d idx %d\n", srcip, recvttl, *meta);
 #endif
 
-    // FIXME: extract info to match with an outgoing probe
+    // sequence offset if relative to end of IP header
+    int sequence_offset = 0;
+    if (iph->protocol == 1) {
+        sequence_offset = ICMP_SEQ_OFF;
+    } else if (iph->protocol == 6) {
+        sequence_offset = TCP_SEQ_OFF + 2;
+    } else if (iph->protocol == 17) {
+        sequence_offset = UDP_CSUM_OFF;
+    }
+    if (data + offset + sequence_offset + 2 > data_end) {
+        return XDP_DROP;
+    }
+    u16 seq = *(u16*)(data + offset + sequence_offset);
+    seq = ntohs(seq);
+#if DEBUG
+    bpf_trace_printk("INGRESS seq %d from %d received\n", seq, *meta);
+#endif
 
-    return XDP_PASS;
+    return XDP_DROP;
 }
 
 int ingress_v6(struct xdp_md *ctx) {
@@ -711,3 +719,4 @@ int ingress_v6(struct xdp_md *ctx) {
 
     return XDP_PASS;
 }
+
