@@ -48,7 +48,7 @@ def address_interest_v4(table, a, dinfo):
         xaddr._u._addr8[i] = 0
         dinfo[idx].dest._u._addr8[i] = 0
     table[xaddr] = ctypes.c_uint64(idx)
-    dinfo[idx].hop_bitmap = 0xffffffff
+    dinfo[idx].hop_bitmap = 0
     dinfo[idx].max_ttl = 16
 
 def address_interest_v6(table, a, dinfo):
@@ -60,7 +60,7 @@ def address_interest_v6(table, a, dinfo):
         xaddr._u._addr8[i] = pstr[i]
         dinfo[idx].dest._u._addr8[i] = pstr[i]
     table[xaddr] = ctypes.c_uint64(idx)
-    dinfo[idx].hop_bitmap = 0xffffffff
+    dinfo[idx].hop_bitmap = 0
     dinfo[idx].max_ttl = 16
 
 def _set_bpf_jumptable(bpf, tablename, idx, fnname, progtype):
@@ -84,7 +84,7 @@ def main(args):
         sys.exit(-1)
     logging.info("ifindex for {} is {}".format(args.interface, idx))
 
-    cflags = ['-Wall', '-DMIN_PROBE=1000000'] # 1 millisec
+    cflags = ['-Wall', '-DMIN_PROBE={}'.format(1000000 * args.probeint)] # 1 millisec default
     cflags.append('-DIFINDEX={}'.format(idx))
     if args.encapsulation == 'ipinip':
         cflags.append('-DTUNNEL=4')
@@ -158,6 +158,9 @@ def main(args):
     logging.info("start")
     metadata['results'] = []
     resultidx = 0
+    start = time.time()
+    expire = 0
+    maskon = False
     while True:
         try:
             time.sleep(1)
@@ -175,9 +178,27 @@ def main(args):
                     if resultidx == MAX_RESULTS:
                         resultidx = 0
 
+            now = time.time()
+            if now >= expire:
+                # flip all hop_mask values to 0xffffffff (or 0)
+                maskon = not maskon
+                mask = 0
+                expire = args.off + now
+                which = "off"
+                if maskon:
+                    mask = 0xfffffff
+                    expire = args.on + now
+                    which = "on"
+                logging.info("Turning non-responsive hop mask {}".format(which))
+
+                for k,v in table.items():
+                    idx = v.value
+                    print(idx, destinfo[idx].hop_mask)
+                    destinfo[idx].hop_mask = mask
+                    print(idx, destinfo[idx].hop_mask)
+
         except KeyboardInterrupt:
             break
-
             
     logging.info("ok - done")
 
@@ -251,9 +272,12 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument('-x', '--on', default=60, type=int, help='Amount of time (seconds) to be "on" for probing non-responsive hops')
+    parser.add_argument('-y', '--off', default=1, type=int, help='Amount of time (seconds) to be "off" for probing non-responsive hops')
     parser.add_argument('-l', '--logfile', default=False, action='store_true', help='Turn on logfile output')
     parser.add_argument('-f', '--filebase', default='ebpf_probe', help='Configure base name for log and data output files')
     parser.add_argument('-d', '--debug', default=False, action='store_true', help='Turn on debug logging')
+    parser.add_argument('-p', '--probeint', default=1, type=int, help='Minimum probe interval (milliseconds)')
     parser.add_argument('-i', '--interface', required=True, type=str, help='Interface/device to use')
     parser.add_argument('-e', '--encapsulation', choices=('ethernet', 'ipinip', 'ip6inip'), default='ethernet', help='How packets are encapsulated on the wire')
     parser.add_argument('addresses', metavar='addresses', nargs='*', type=str, help='IP addresses of interest')

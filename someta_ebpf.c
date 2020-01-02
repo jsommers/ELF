@@ -140,10 +140,10 @@ struct _icmphdr {
 
 struct probe_dest {
     u32         hop_bitmap;
+    u32         hop_mask;
     u32         sequence;
     u16         next_hop_to_probe;
     u16         maxttl;
-    u32         pad;
     u64         last_send;
     _in6_addr_t dest;
 };
@@ -209,11 +209,17 @@ static inline void _update_maxttl(int idx, int ttl) {
 static inline void _decide_seq_ttl(struct probe_dest *pd, u32 *seq, u8 *ttl) {
     *seq = pd->sequence;
     pd->sequence++;
+
+#if DEBUG
+    bpf_trace_printk("EGRESS decide seqttl bitmap 0x%x mask 0x%x seq %d\n", pd->hop_bitmap, pd->hop_mask, *seq);
+#endif
     
 #pragma unroll
     for (u16 i = 0; i < 8; i++) {
         u16 hop = (pd->next_hop_to_probe + i) % pd->maxttl;
-        if (((pd->hop_bitmap << hop) & 0x1) == 0x1) {
+        if (*seq < pd->maxttl || 
+            ((pd->hop_mask >> hop) & 0x1) == 0x1 ||
+            ((pd->hop_bitmap >> hop) & 0x1) == 0x1) {
             *ttl = (u8)(hop + 1);
             pd->next_hop_to_probe = (hop + 1) % pd->maxttl;
             return;
@@ -651,6 +657,14 @@ int ingress_v4(struct xdp_md *ctx) {
 #if DEBUG
     bpf_trace_printk("INGRESS got sentinfo sample ptr\n");
 #endif
+
+    // update bitmap to show hop as responsive
+    int idx = *val;
+    struct probe_dest *pd = destinfo.lookup(&idx);
+    if (pd != NULL) {
+        u32 newbit = 1 << (si->outttl-1); 
+        pd->hop_bitmap = pd->hop_bitmap | newbit;
+    }
 
     latsamp->send = si->send_time;
     latsamp->outttl = si->outttl;
