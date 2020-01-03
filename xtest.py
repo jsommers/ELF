@@ -49,6 +49,7 @@ def address_interest_v4(table, a, dinfo):
         dinfo[idx].dest._u._addr8[i] = 0
     table[xaddr] = ctypes.c_uint64(idx)
     dinfo[idx].hop_bitmap = 0
+    dinfo[idx].hop_mask = 0xffff
     dinfo[idx].max_ttl = 16
 
 def address_interest_v6(table, a, dinfo):
@@ -61,6 +62,7 @@ def address_interest_v6(table, a, dinfo):
         dinfo[idx].dest._u._addr8[i] = pstr[i]
     table[xaddr] = ctypes.c_uint64(idx)
     dinfo[idx].hop_bitmap = 0
+    dinfo[idx].hop_mask = 0xffff
     dinfo[idx].max_ttl = 16
 
 def _set_bpf_jumptable(bpf, tablename, idx, fnname, progtype):
@@ -159,7 +161,7 @@ def main(args):
     metadata['results'] = []
     resultidx = 0
     start = time.time()
-    expire = 0
+    expire = start+1
     maskon = False
     while True:
         try:
@@ -180,22 +182,21 @@ def main(args):
 
             now = time.time()
             if now >= expire:
-                # flip all hop_mask values to 0xffffffff (or 0)
                 maskon = not maskon
                 mask = 0
                 expire = args.off + now
                 which = "off"
                 if maskon:
-                    mask = 0xfffffff
+                    mask = 0xffff
                     expire = args.on + now
                     which = "on"
                 logging.info("Turning non-responsive hop mask {}".format(which))
 
                 for k,v in table.items():
                     idx = v.value
-                    print(idx, destinfo[idx].hop_mask)
+                    print(idx, destinfo[idx].hop_mask, destinfo[idx].hop_bitmap)
                     destinfo[idx].hop_mask = mask
-                    print(idx, destinfo[idx].hop_mask)
+                    print(idx, destinfo[idx].hop_mask, destinfo[idx].hop_bitmap)
 
         except KeyboardInterrupt:
             break
