@@ -78,7 +78,7 @@ def _set_bpf_jumptable(bpf, tablename, idx, fnname, progtype):
 def main(args):
     metadata = {}
     if args.logfile:
-        logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)s %(message)s', filename=args.filebase + '.log')
+        logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)s %(message)s', filename=args.filebase + '.log', filemode='w')
     else:
         logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)s %(message)s')
 
