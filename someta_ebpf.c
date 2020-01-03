@@ -396,6 +396,9 @@ int egress_v4_tcp(struct __sk_buff *ctx) {
     }
 
     // decide what TTL to use in probe
+    u16 sport = load_half(ctx, offset + TCP_SRC_OFF);
+    u16 dport = load_half(ctx, offset + TCP_DST_OFF);
+
     u64 now = bpf_ktime_get_ns();
     u32 origseq = load_word(ctx, offset + TCP_SEQ_OFF);
     u32 sequence = 0;
@@ -420,7 +423,7 @@ int egress_v4_tcp(struct __sk_buff *ctx) {
     struct _tcphdr newtcp;
     __builtin_memset(&newtcp, 0, sizeof(struct _tcphdr));
     newtcp.th_sport = htons(sport);
-    newtcp.th_dport = htons(dport)
+    newtcp.th_dport = htons(dport);
     newtcp.th_seq = htonl(sequence);
     newtcp.th_off = 0x5;
     newtcp.th_flags = TH_ACK;
@@ -482,8 +485,6 @@ int egress_v4_tcp(struct __sk_buff *ctx) {
     pd->last_send = now;
     u64 sentkey = (u64)idx << 32 | (u64)sequence;
     _in6_addr_t destaddr6 = { destaddr, 0, 0, 0 };
-    u16 sport = load_half(ctx, offset + TCP_SRC_OFF);
-    u16 dport = load_half(ctx, offset + TCP_DST_OFF);
     struct sent_info si = {
         .send_time = now,
         .dest = destaddr6,
@@ -537,6 +538,8 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     u8 newttl = 0;
     u32 destaddr = load_word(ctx, NHOFFSET + IP_DST_OFF);
     _decide_seq_ttl(pd, &sequence, &newttl);
+    u16 sport = load_half(ctx, offset + UDP_SRC_OFF);
+    u16 dport = load_half(ctx, offset + UDP_DST_OFF);
     
 #if DEBUG
     bpf_trace_printk("outgoing seq %lu\n", sequence);
@@ -556,7 +559,7 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     __builtin_memset(&newudp, 0, sizeof(struct _udphdr));
     newudp.uh_sport = htons(sport);
     newudp.uh_dport = htons(dport);
-    newudp.uh_len = htons(10);
+    newudp.uh_ulen = htons(10);
 
     // get current header values 
     u16 curr_ip_len = htons(load_half(ctx, NHOFFSET + IP_LEN_OFF));
@@ -593,11 +596,11 @@ int egress_v4_udp(struct __sk_buff *ctx) {
 
     // fixme: compute extra halfword to force checksum value
     // to be the sequence number we want
-    add_words = add_words >> 16 + add_words & 0xffff
+    add_words = (add_words >> 16) + (add_words & 0xffff);
     if (add_words > 0xffff) {
-        add_words = add_words >> 16 + add_words & 0xffff
+        add_words = (add_words >> 16) + (add_words & 0xffff);
     }
-    u16 extra_halfword = 0xffff - (add_words + sequence + 1)
+    u16 extra_halfword = 0xffff - (add_words + sequence + 1);
     rv = bpf_skb_store_bytes(ctx, NHOFFSET + iphlen + sizeof(struct _udphdr), &extra_halfword, 2, 0);
     if (rv < 0) {
 #if DEBUG
@@ -634,8 +637,6 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     pd->last_send = now;
     u64 sentkey = (u64)idx << 32 | (u64)sequence;
     _in6_addr_t destaddr6 = { destaddr, 0, 0, 0 };
-    u16 sport = load_half(ctx, offset + UDP_SRC_OFF);
-    u16 dport = load_half(ctx, offset + UDP_DST_OFF);
     struct sent_info si = {
         .send_time = now,
         .dest = destaddr6,

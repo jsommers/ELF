@@ -11,6 +11,7 @@ import bcc
 from bcc import BPF
 import pyroute2
 
+# constants that mirror bpf C
 RESULTS_IDX = 256
 MAX_RESULTS = 8192
 
@@ -22,10 +23,17 @@ class _u(ctypes.Union):
     ]
 
 class in6_addr(ctypes.Structure):
+    '''
+    Mirror struct of in6_addr in bpf C
+    '''
     _fields_ = [('_u', _u)]
 
 
 def to_ipaddr(obj):
+    '''
+    bytes -> ipaddr
+    Convert raw bytes into an ipaddress object.
+    '''
     if obj._u._addr32[3] == 0:
         # ip4
         return ipaddress.IPv4Address(socket.ntohl(obj._u._addr32[0]))
@@ -35,37 +43,34 @@ def to_ipaddr(obj):
             i = i << 32 | socket.ntohl(obj._u._addr32[j])
         return ipaddress.IPv6Address(i)
 
-
-def address_interest_v4(table, a, dinfo):
+def new_address_of_interest(table, a, dinfo):
+    '''
+    (bpftable, ipaddr, bpftable) -> None
+    Add a new address of interest to bpf tables
+    (and initialize table structures)
+    '''
     xaddr = in6_addr()
-    ip4 = ipaddress.ip_address(a)
-    pstr = ip4.packed
+    ip = ipaddress.ip_address(a)
+    pstr = ip.packed
     idx = len(table) + 1
     for i in range(len(pstr)):
         xaddr._u._addr8[i] = pstr[i]
         dinfo[idx].dest._u._addr8[i] = pstr[i]
-    for i in range(4, 16):
-        xaddr._u._addr8[i] = 0
-        dinfo[idx].dest._u._addr8[i] = 0
-    table[xaddr] = ctypes.c_uint64(idx)
-    dinfo[idx].hop_bitmap = 0
-    dinfo[idx].hop_mask = 0xffff
-    dinfo[idx].max_ttl = 16
-
-def address_interest_v6(table, a, dinfo):
-    xaddr = in6_addr()
-    ip6 = ipaddress.ip_address(a)
-    pstr = ip6.packed
-    idx = len(table) + 1
-    for i in range(len(pstr)):
-        xaddr._u._addr8[i] = pstr[i]
-        dinfo[idx].dest._u._addr8[i] = pstr[i]
+    if ip.version == 4:
+        for i in range(4, 16):
+            xaddr._u._addr8[i] = 0
+            dinfo[idx].dest._u._addr8[i] = 0
     table[xaddr] = ctypes.c_uint64(idx)
     dinfo[idx].hop_bitmap = 0
     dinfo[idx].hop_mask = 0xffff
     dinfo[idx].max_ttl = 16
 
 def _set_bpf_jumptable(bpf, tablename, idx, fnname, progtype):
+    '''
+    (bccobj, str, int, str, int) -> None
+    Set up one entry in a bpf jump table to enable chaining
+    bpf function calls.
+    '''
     tail_fn = bpf.load_func(fnname, progtype)
     prog_array = bpf.get_table(tablename)
     prog_array[ctypes.c_int(idx)] = ctypes.c_int(tail_fn.fd)
@@ -110,13 +115,7 @@ def main(args):
     #DEVICE='eno2'
     #DEVICE='wlp4s0'
 
-    # how to inject something into the table
-    table = b['trie']
     destinfo = b['destinfo']
-
-    #address_interest_v4(table, '149.43.152.10', destinfo)
-    #address_interest_v4(table, '149.43.80.25', destinfo)
-    #address_interest_v6(table, '2604:6000:141a:e3:8d2:dcb2:edd4:d60d', destinfo)
     metadata['timestamp'] = time.asctime()
     metadata['interface'] = args.interface
     metadata['interface_idx'] = idx
@@ -124,12 +123,8 @@ def main(args):
     for name in args.addresses:
         for family,_,_,_,sockaddr in socket.getaddrinfo(name, None):
             addr = sockaddr[0]
-            ipaddr = ipaddress.ip_address(addr)
-            metadata['hosts'][str(ipaddr)] = name
-            if ipaddr.version == 4:
-                address_interest_v4(table, addr, destinfo)
-            else:
-                address_interest_v6(table, addr, destinfo)
+            metadata['hosts'][addr] = name
+            new_address_of_interest(b['trie'], addr, destinfo)
 
     egress_fn = b.load_func('egress_path', BPF.SCHED_CLS)
     ingress_fn = b.load_func("ingress_path", BPF.XDP)
@@ -159,7 +154,7 @@ def main(args):
 
     logging.info("start")
     metadata['results'] = []
-    resultidx = 0
+    resultcount = 0
     start = time.time()
     expire = start+1
     maskon = False
@@ -169,16 +164,15 @@ def main(args):
             resultval = -1
             for k,v in b['counters'].items():
                 if k.value == RESULTS_IDX:
-                    resultval = v.value
+                    rc = v.value
             if resultval > -1:
-                while resultidx != resultval:
+                while resultcount < rc:
+                    resultidx = resultcount % MAX_RESULTS
                     res = b['results'][resultidx]
                     print(resultidx, res.sequence, res.origseq, res.recv-res.send, res.send, res.recv, res.sport, res.dport, res.outttl, res.recvttl, to_ipaddr(res.responder), to_ipaddr(res.target), res.protocol)
                     d = {'seq':res.sequence, 'origseq':res.origseq, 'latency':(res.recv-res.send), 'sendtime':res.send, 'recvtime':res.recv, 'dest':str(to_ipaddr(res.target)), 'responder':str(to_ipaddr(res.responder)), 'outttl':res.outttl, 'recvttl':res.recvttl, 'sport':res.sport, 'dport':res.dport, 'protocol':res.protocol}
                     metadata['results'].append(d)
-                    resultidx += 1
-                    if resultidx == MAX_RESULTS:
-                        resultidx = 0
+                    resultcount += 1
 
             now = time.time()
             if now >= expire:
@@ -192,7 +186,7 @@ def main(args):
                     which = "on"
                 logging.info("Turning non-responsive hop mask {}".format(which))
 
-                for k,v in table.items():
+                for k,v in b['trie'].items():
                     idx = v.value
                     print(idx, destinfo[idx].hop_mask, destinfo[idx].hop_bitmap)
                     destinfo[idx].hop_mask = mask
@@ -208,11 +202,11 @@ def main(args):
     logging.info("removing filters and shutting down")
 
     print('counters')
-    resultval = -1
+    rc = resultcount
     for k,v in b['counters'].items():
         print("\t",k,v)
         if k.value == RESULTS_IDX:
-            resultval = v.value
+            rc = v.value
 
     print('trie')
     for k,v in b['trie'].items():
@@ -236,14 +230,13 @@ def main(args):
         d = {'seq':seq, 'origseq':v.origseq, 'sendtime':v.send_time, 'dest':str(to_ipaddr(v.dest)), 'outttl':v.outttl, 'sport':v.sport, 'dport':v.dport, 'recvtime':0, 'responder':'', 'recvttl':-1, 'latency':-1, 'protocol':v.protocol}
         metadata['results'].append(d)
 
-    while resultidx != resultval:
+    while resultcount < rc:
+        resultidx = resultcount % MAX_RESULTS
         res = b['results'][resultidx]
         print(resultidx, res.sequence, res.origseq, res.recv-res.send, res.send, res.recv, res.sport, res.dport, res.outttl, res.recvttl, to_ipaddr(res.responder), to_ipaddr(res.target), res.protocol)
         d = {'seq':res.sequence, 'origseq':res.origseq, 'latency':(res.recv-res.send), 'sendtime':res.send, 'recvtime':res.recv, 'dest':str(to_ipaddr(res.target)), 'responder':str(to_ipaddr(res.responder)), 'outttl':res.outttl, 'recvttl':res.recvttl, 'sport':res.sport, 'dport':res.dport, 'protocol':res.protocol}
         metadata['results'].append(d)
-        resultidx += 1
-        if resultidx == MAX_RESULTS:
-            resultidx = 0
+        resultcount += 1
 
     if args.debug:
         logging.debug("kernel debug messages: ")
