@@ -126,8 +126,6 @@ struct _icmphdr {
 #define TCP_DST_OFF offsetof(struct _tcphdr, th_dport)
 #define TCP_SEQ_OFF offsetof(struct _tcphdr, th_seq)
 #define TCP_ACK_OFF offsetof(struct _tcphdr, th_ack)
-#define TCP_URG_OFF offsetof(struct _tcphdr, th_urp)
-#define TCP_WIN_OFF offsetof(struct _tcphdr, th_win)
 #define TCP_CSUM_OFF offsetof(struct _tcphdr, th_sum)
 #define UDP_SRC_OFF offsetof(struct _udphdr, uh_sport)
 #define UDP_DST_OFF offsetof(struct _udphdr, uh_dport)
@@ -255,7 +253,7 @@ static inline int _should_probe_dest(int idx) {
 
 int egress_v4_icmp(struct __sk_buff *ctx) {
 #if DEBUG
-    bpf_trace_printk("egress v4 icmp mark %d\n", ctx->mark);
+    bpf_trace_printk("EGRESS icmp4 mark %d\n", ctx->mark);
 #endif
     int idx = ctx->mark;
     struct probe_dest *pd = destinfo.lookup(&idx);
@@ -292,20 +290,20 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
     _decide_seq_ttl(pd, &sequence, &newttl);
     
 #if DEBUG
-    bpf_trace_printk("EGRESS outgoing seq %lu\n", sequence);
+    bpf_trace_printk("EGRESS icmp4 outgoing seq %lu\n", sequence);
 #endif
 
     // clone and redirect the original pkt out the intended interface
     int rv = bpf_clone_redirect(ctx, IFINDEX, 0);
     if (rv < 0) {
 #if DEBUG
-        bpf_trace_printk("EGRESS bpf clone ifidx %d failed: %d\n", IFINDEX, rv);
+        bpf_trace_printk("EGRESS icmp4 bpf clone ifidx %d failed: %d\n", IFINDEX, rv);
 #endif
         // if clone fails, just let the packet pass w/o trying to do any modifications below
         return TC_ACT_OK;
     }
 #if DEBUG
-    bpf_trace_printk("EGRESS after clone emit tcp4 %lu\n", sequence);
+    bpf_trace_printk("EGRESS icmp4 after clone emit %lu\n", sequence);
 #endif
 
     u16 old_ttl_proto = load_half(ctx, NHOFFSET + IP_TTL_OFF);
@@ -315,7 +313,7 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
     rv = bpf_l3_csum_replace(ctx, NHOFFSET + IP_CSUM_OFF, htons(old_ttl_proto), new_ttl_proto, 2);
     if (rv < 0) {
 #if DEBUG
-        bpf_trace_printk("failed to replace csum icmp path\n");
+        bpf_trace_printk("EGRESS icmp4 failed to replace csum\n");
 #endif
         return TC_ACT_SHOT;
     }
@@ -324,7 +322,7 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
     rv = bpf_skb_store_bytes(ctx, NHOFFSET + IP_TTL_OFF, &new_ttl_proto, sizeof(new_ttl_proto), 0);
     if (rv < 0) {
 #if DEBUG
-        bpf_trace_printk("failed to store new ttl/proto icmp path\n");
+        bpf_trace_printk("EGRESS icmp4 failed to store new ttl/proto\n");
 #endif
         return TC_ACT_SHOT;
     }
@@ -335,7 +333,7 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
     rv = bpf_skb_store_bytes(ctx, offset + ICMP_SEQ_OFF, &newseq, sizeof(newseq), 0);
     if (rv < 0) {
 #if DEBUG
-        bpf_trace_printk("failed to store new icmp seq\n");
+        bpf_trace_printk("EGRESS icmp4 failed to store new icmp seq\n");
 #endif
         return TC_ACT_SHOT;
     }
@@ -348,7 +346,7 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
     rv = bpf_skb_store_bytes(ctx, offset + ICMP_CSUM_OFF, &newcsum, sizeof(newcsum), 0);
     if (rv < 0) {
 #if DEBUG
-        bpf_trace_printk("failed to store new icmp csum\n");
+        bpf_trace_printk("EGRESS icmp4 failed to store new icmp csum\n");
 #endif
         return TC_ACT_SHOT;
     }
@@ -372,14 +370,14 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
     sentinfo.update(&sentkey, &si);
 
 #if DEBUG
-    bpf_trace_printk("EGRESS emitting probe icmpv4 %lu\n", sequence);
+    bpf_trace_printk("EGRESS icmp4 emitting probe %lu\n", sequence);
 #endif
     return TC_ACT_OK;
 }
 
 int egress_v4_tcp(struct __sk_buff *ctx) {
 #if DEBUG
-    bpf_trace_printk("EGRESS v4 tcp mark %d\n", ctx->mark);
+    bpf_trace_printk("EGRESS tcp4 mark %d\n", ctx->mark);
 #endif
 
     int idx = ctx->mark;
@@ -420,20 +418,20 @@ int egress_v4_tcp(struct __sk_buff *ctx) {
     _decide_seq_ttl(pd, &sequence, &newttl);
     
 #if DEBUG
-    bpf_trace_printk("EGRESS outgoing seq %lu\n", sequence);
+    bpf_trace_printk("EGRESS tcp4 outgoing seq %lu\n", sequence);
 #endif
 
     // clone and redirect the original pkt out the intended interface
     int rv = bpf_clone_redirect(ctx, IFINDEX, 0);
     if (rv < 0) {
 #if DEBUG
-        bpf_trace_printk("EGRESS bpf clone ifidx %d failed: %d\n", IFINDEX, rv);
+        bpf_trace_printk("EGRESS tcp4 bpf clone ifidx %d failed: %d\n", IFINDEX, rv);
 #endif
         // if clone fails, just let the packet pass w/o trying to do any modifications below
         return TC_ACT_OK;
     }
 #ifdef DEBUG
-    bpf_trace_printk("EGRESS after clone emit tcp4 %lu\n", sequence);
+    bpf_trace_printk("EGRESS tcp4 after clone emit %lu\n", sequence);
 #endif
 
     struct _tcphdr newtcp;
@@ -457,7 +455,7 @@ int egress_v4_tcp(struct __sk_buff *ctx) {
     rv = bpf_skb_change_tail(ctx, NHOFFSET + new_ip_len, 0);
     if (rv < 0) {
 #if DEBUG
-        bpf_trace_printk("EGRESS bpf trunc packet failed\n");
+        bpf_trace_printk("EGRESS tcp4 bpf trunc packet failed\n");
 #endif
         return TC_ACT_SHOT;
     }
@@ -465,7 +463,7 @@ int egress_v4_tcp(struct __sk_buff *ctx) {
     rv = bpf_skb_store_bytes(ctx, NHOFFSET + iphlen, &newtcp, sizeof(struct _tcphdr), 0);
     if (rv < 0) {
 #if DEBUG
-        bpf_trace_printk("EGRESS bpf store new tcp hdr failed\n");
+        bpf_trace_printk("EGRESS tcp4 bpf store new tcp hdr failed\n");
 #endif
         return TC_ACT_SHOT;
     }
@@ -488,13 +486,13 @@ int egress_v4_tcp(struct __sk_buff *ctx) {
 
     rv = bpf_l3_csum_replace(ctx, NHOFFSET + IP_CSUM_OFF, htons(old_ttl_proto), new_ttl_proto, 2);
 #if DEBUG
-    bpf_trace_printk("EGRESS after replace csum tcp4 path\n");
+    bpf_trace_printk("EGRESS tcp4 after replace csum\n");
 #endif
 
     rv = bpf_skb_store_bytes(ctx, NHOFFSET + IP_TTL_OFF, &new_ttl_proto, sizeof(new_ttl_proto), 0);
     if (rv < 0) {
 #if DEBUG
-        bpf_trace_printk("EGRESS failed to store new ttl/proto tcp4 path\n");
+        bpf_trace_printk("EGRESS tcp4 failed to store new ttl/proto\n");
 #endif
         return TC_ACT_SHOT;
     }
@@ -516,14 +514,14 @@ int egress_v4_tcp(struct __sk_buff *ctx) {
     sentinfo.update(&sentkey, &si);
 
 #if DEBUG
-    bpf_trace_printk("EGRESS emitting tcpv4 probe %llu\n", sequence);
+    bpf_trace_printk("EGRESS tcp4 emitting probe %llu\n", sequence);
 #endif
     return TC_ACT_OK;
 }
 
 int egress_v4_udp(struct __sk_buff *ctx) {
 #if DEBUG
-    bpf_trace_printk("EGRESS v4 udp mark %d\n", ctx->mark);
+    bpf_trace_printk("EGRESS udp4 mark %d\n", ctx->mark);
 #endif
 
     int idx = ctx->mark;
@@ -545,12 +543,10 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     struct _iphdr *iph = (struct _iphdr*)(data + offset);
     int iphlen = (iph->verihl&0x0f) << 2;
     offset = offset + iphlen;
-    /*
-    struct _udphdr *udph = (struct _udphdr*)(data + offset);
     if (data + offset + sizeof(struct _udphdr) > data_end) {
         return TC_ACT_OK;
     }
-    */
+    struct _udphdr *udph = (struct _udphdr*)(data + offset);
 
     // decide what TTL to use in probe
     u64 now = bpf_ktime_get_ns();
@@ -563,7 +559,7 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     u16 dport = load_half(ctx, offset + UDP_DST_OFF);
     
 #if DEBUG
-    bpf_trace_printk("EGRESS udp4 outgoing seq %lu\n", sequence);
+    bpf_trace_printk("EGRESS udp4 outgoing seq %lu origseq 0x%x\n", sequence, origseq);
 #endif
 
     // clone and redirect the original pkt out the intended interface
@@ -575,25 +571,32 @@ int egress_v4_udp(struct __sk_buff *ctx) {
         // if clone fails, just let the packet pass w/o trying to do any modifications below
         return TC_ACT_OK;
     }
+
 #ifdef DEBUG
-    bpf_trace_printk("EGRESS after clone emit udp4 %lu\n", sequence);
+    bpf_trace_printk("EGRESS udp4 after clone emit %lu\n", sequence);
 #endif
 
-    struct _udphdr newudp;
+    /*
     u16 uhlen = 10;
-    __builtin_memset(&newudp, 0, sizeof(struct _udphdr));
-    newudp.uh_sport = htons(sport);
-    newudp.uh_dport = htons(dport);
-    newudp.uh_ulen = htons(uhlen);
+    struct _udphdr newudp = {
+        .uh_sport = htons(sport),
+        .uh_dport = htons(dport),
+        .uh_ulen = htons(uhlen),
+        .uh_sum = htons(sequence),
+    };
+    */
 
     // get current header values 
-    u16 curr_ip_len = load_half(ctx, NHOFFSET + IP_LEN_OFF);
-    u16 new_ip_len = iphlen + sizeof(struct _udphdr) + 2;
+    // u16 curr_ip_len = load_half(ctx, NHOFFSET + IP_LEN_OFF);
+    // u16 new_ip_len = iphlen + sizeof(struct _udphdr) + 2;
 
+/*
 #if DEBUG
     bpf_trace_printk("EGRESS tcp4 truncating pkt from %d to %d\n", curr_ip_len, new_ip_len);
 #endif
+*/
 
+    /*
     // truncate packet
     rv = bpf_skb_change_tail(ctx, NHOFFSET + new_ip_len, 0);
     if (rv < 0) {
@@ -610,16 +613,16 @@ int egress_v4_udp(struct __sk_buff *ctx) {
 #endif
         return TC_ACT_SHOT;
     }
-
-    // add in pseudoheader words for udp checksum
-    /*
-    u32 cword = htonl(load_word(ctx, NHOFFSET + IP_SRC_OFF));
-    rv = bpf_l4_csum_replace(ctx, NHOFFSET + iphlen + TCP_CSUM_OFF, 0, cword, 4 | BPF_F_PSEUDO_HDR);
-    cword = htonl(load_word(ctx, NHOFFSET + IP_DST_OFF));
-    rv = bpf_l4_csum_replace(ctx, NHOFFSET + iphlen + TCP_CSUM_OFF, 0, cword, 4 | BPF_F_PSEUDO_HDR);
-    cword = htonl(((u32)IPPROTO_UDP << 16) | 10);
-    rv = bpf_l4_csum_replace(ctx, NHOFFSET + iphlen + TCP_CSUM_OFF, 0, cword, 4 | BPF_F_PSEUDO_HDR);
     */
+
+    /*
+    // add in pseudoheader words for udp checksum
+    // u32 cword = htonl(load_word(ctx, NHOFFSET + IP_SRC_OFF));
+    // rv = bpf_l4_csum_replace(ctx, NHOFFSET + iphlen + TCP_CSUM_OFF, 0, cword, 4 | BPF_F_PSEUDO_HDR);
+    // cword = htonl(load_word(ctx, NHOFFSET + IP_DST_OFF));
+    // rv = bpf_l4_csum_replace(ctx, NHOFFSET + iphlen + TCP_CSUM_OFF, 0, cword, 4 | BPF_F_PSEUDO_HDR);
+    // cword = htonl(((u32)IPPROTO_UDP << 16) | 10);
+    // rv = bpf_l4_csum_replace(ctx, NHOFFSET + iphlen + TCP_CSUM_OFF, 0, cword, 4 | BPF_F_PSEUDO_HDR);
 
     u32 hword_sum = htons(sport);
     hword_sum += htons(dport);
@@ -638,7 +641,15 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     bpf_trace_printk("EGRESS udp4 checksum seq 0x%x ehalfword 0x%x\n", htons((u16)sequence), extra_halfword);
 #endif
 
-    rv = bpf_skb_store_bytes(ctx, NHOFFSET + iphlen + sizeof(struct _udphdr), &extra_halfword, 2, 0);
+    if (data + offset + sizeof(struct _udphdr) + 2 > data_end) {
+        return TC_ACT_SHOT;
+    }
+
+    u16 payload_halfword = load_half(ctx, NHOFFSET + iphlen + sizeof(struct _udphdr));
+    origseq -= payload_halfword;
+    origseq -= sequence;
+
+    rv = bpf_skb_store_bytes(ctx, NHOFFSET + iphlen + sizeof(struct _udphdr), &origseq, 2, 0);
     if (rv < 0) {
 #if DEBUG
         bpf_trace_printk("EGRESS udp4 failed to store udp payload bytes to force csum\n");
@@ -653,11 +664,14 @@ int egress_v4_udp(struct __sk_buff *ctx) {
 #endif
         return TC_ACT_SHOT;
     }
+*/
 
+    /*
     new_ip_len = htons(new_ip_len);
     curr_ip_len = htons(curr_ip_len);
     rv = bpf_l3_csum_replace(ctx, NHOFFSET + IP_CSUM_OFF, curr_ip_len, new_ip_len, 2);
     rv = bpf_skb_store_bytes(ctx, NHOFFSET + IP_LEN_OFF, &new_ip_len, sizeof(new_ip_len), 0);
+    */
 
     u16 old_ttl_proto = load_half(ctx, NHOFFSET + IP_TTL_OFF);
     u16 new_ttl_proto = htons(((u16)newttl) << 8 | IPPROTO_UDP);
@@ -665,7 +679,7 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     rv = bpf_l3_csum_replace(ctx, NHOFFSET + IP_CSUM_OFF, htons(old_ttl_proto), new_ttl_proto, 2);
     if (rv < 0) {
 #if DEBUG
-        bpf_trace_printk("EGRESS failed to replace csum udp4 path\n");
+        bpf_trace_printk("EGRESS udp4 failed to replace csum\n");
 #endif
         return TC_ACT_SHOT;
     }
@@ -673,7 +687,7 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     rv = bpf_skb_store_bytes(ctx, NHOFFSET + IP_TTL_OFF, &new_ttl_proto, sizeof(new_ttl_proto), 0);
     if (rv < 0) {
 #if DEBUG
-        bpf_trace_printk("EGRESS failed to store new ttl/proto udp4 path\n");
+        bpf_trace_printk("EGRESS udp4 failed to store new ttl/proto\n");
 #endif
         return TC_ACT_SHOT;
     }
@@ -695,7 +709,7 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     sentinfo.update(&sentkey, &si);
 
 #if DEBUG
-    bpf_trace_printk("EGRESS emitting udpv4 probe %llu\n", sequence);
+    bpf_trace_printk("EGRESS udp4 emitting probe %llu\n", sequence);
 #endif
 
     return TC_ACT_OK;
@@ -738,7 +752,7 @@ int egress_v4(struct __sk_buff *ctx) {
 
 int egress_v6_icmp(struct __sk_buff *ctx) {
 #if DEBUG
-    bpf_trace_printk("egress v6 icmp mark %d\n", ctx->mark);
+    bpf_trace_printk("EGRESS icmp6 mark %d\n", ctx->mark);
 #endif
 
     return TC_ACT_OK;
@@ -746,14 +760,14 @@ int egress_v6_icmp(struct __sk_buff *ctx) {
 
 int egress_v6_tcp(struct __sk_buff *ctx) {
 #if DEBUG
-    bpf_trace_printk("egress v6 tcp mark %d\n", ctx->mark);
+    bpf_trace_printk("EGRESS tcp6 mark %d\n", ctx->mark);
 #endif
     return TC_ACT_OK;
 }
 
 int egress_v6_udp(struct __sk_buff *ctx) {
 #if DEBUG
-    bpf_trace_printk("egress v6 udp mark %d\n", ctx->mark);
+    bpf_trace_printk("EGRESS udp6 mark %d\n", ctx->mark);
 #endif
     return TC_ACT_OK;
 }
@@ -934,14 +948,15 @@ int ingress_v4(struct xdp_md *ctx) {
     } else if (iph->protocol == 17) {
         sequence_offset = UDP_CSUM_OFF;
     }
-    if (data + offset + sequence_offset + 2 > data_end) {
+    if (data + offset + 8 > data_end) {
         return XDP_DROP;
     }
     u16 seq = *(u16*)(data + offset + sequence_offset);
     seq = ntohs(seq);
-    if (iph->protocol == 17 && seq == 0xffff) {
-        seq = 0;
-    }
+    u16 sport = *(u16*)(data + offset);
+    sport = ntohs(sport);
+    u16 dport = *(u16*)(data + offset + 2);
+    dport = ntohs(dport);
 #if DEBUG
     bpf_trace_printk("INGRESS seq %d proto %d from %d received\n", seq, iph->protocol, *val);
 #endif
@@ -971,6 +986,8 @@ int ingress_v4(struct xdp_md *ctx) {
     latsamp->sequence = seq;
     latsamp->recv = bpf_ktime_get_ns();
     latsamp->recvttl = recvttl;
+    latsamp->sport = sport;
+    latsamp->dport = dport;
     __builtin_memcpy(&latsamp->responder, &source, sizeof(_in6_addr_t));
     __builtin_memcpy(&latsamp->target, &origdst, sizeof(_in6_addr_t));
     counters.increment(RESULTS_IDX);
