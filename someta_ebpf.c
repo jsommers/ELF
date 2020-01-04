@@ -117,6 +117,7 @@ struct _icmphdr {
 #define IP_SRC_OFF offsetof(struct _iphdr, saddr)
 #define IP_DST_OFF offsetof(struct _iphdr, daddr)
 #define IP_LEN_OFF offsetof(struct _iphdr, tot_len)
+#define IP_ID_OFF offsetof(struct _iphdr, id)
 #define IP_CSUM_OFF offsetof(struct _iphdr, check)
 #define ICMP_CSUM_OFF offsetof(struct _icmphdr, icmp_cksum)
 #define ICMP_TYPE_OFF offsetof(struct _icmphdr, icmp_type)
@@ -133,7 +134,6 @@ struct _icmphdr {
 
 struct probe_dest {
     u32         hop_bitmap;
-    u32         hop_mask;
     u16         sequence;
     u16         next_hop_to_probe;
     u16         maxttl;
@@ -151,12 +151,13 @@ struct sent_info {
     u32         origseq;
     u8          outttl;
     u8          protocol;
-    u16         pad1;
-    u32         pad2;
+    u16         outipid;
 };
 
 struct latency_sample {
     u16         sequence;
+    u16         outipid;
+    u16         inipid;
     u16         pad1;
     u32         origseq;
     u64         send;
@@ -219,14 +220,13 @@ static inline void _decide_seq_ttl(struct probe_dest *pd, u16 *seq, u8 *ttl) {
     pd->sequence++;
 
 #if DEBUG
-    bpf_trace_printk("EGRESS decide seqttl bitmap 0x%x mask 0x%x seq %d\n", pd->hop_bitmap, pd->hop_mask, *seq);
+    bpf_trace_printk("EGRESS decide seqttl bitmap 0x%x seq %d\n", pd->hop_bitmap, *seq);
 #endif
     
 #pragma unroll
     for (u16 i = 0; i < 8; i++) {
         u16 hop = (pd->next_hop_to_probe + i) % pd->maxttl;
-        if (*seq < pd->maxttl || 
-            ((pd->hop_mask >> hop) & 0x1) == 0x1 ||
+        if (*seq < (pd->maxttl*3) || 
             ((pd->hop_bitmap >> hop) & 0x1) == 0x1) {
             *ttl = (u8)(hop + 1);
             pd->next_hop_to_probe = (hop + 1) % pd->maxttl;
@@ -284,6 +284,9 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
     // decide what TTL to use in probe
     u64 now = bpf_ktime_get_ns();
     u16 origseq = load_half(ctx, offset + ICMP_SEQ_OFF);
+    u16 outipid = load_half(ctx, NHOFFSET + IP_ID_OFF);
+    u16 sport = load_half(ctx, offset + ICMP_TYPE_OFF);
+    u16 dport = load_half(ctx, offset + ICMP_CSUM_OFF);
     u16 sequence = 0;
     u8 newttl = 0;
     u32 destaddr = load_word(ctx, NHOFFSET + IP_DST_OFF);
@@ -305,6 +308,10 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
 #if DEBUG
     bpf_trace_printk("EGRESS icmp4 after clone emit %lu\n", sequence);
 #endif
+
+    if (data + offset + sizeof(struct _icmphdr) > data_end) {
+        return TC_ACT_SHOT;
+    }
 
     u16 old_ttl_proto = load_half(ctx, NHOFFSET + IP_TTL_OFF);
     u16 new_ttl_proto = htons(((u16)newttl) << 8 | IPPROTO_ICMP);
@@ -356,8 +363,6 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
     pd->last_send = now;
     u64 sentkey = (u64)idx << 32 | (u64)sequence;
     _in6_addr_t destaddr6 = {{{ destaddr, 0, 0, 0 }}};
-    u16 sport = load_half(ctx, offset + ICMP_TYPE_OFF);
-    u16 dport = load_half(ctx, offset + ICMP_CSUM_OFF);
     struct sent_info si = {
         .send_time = now,
         .dest = destaddr6,
@@ -366,6 +371,7 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
         .origseq = origseq,
         .outttl = newttl,
         .protocol = IPPROTO_ICMP,
+        .outipid = outipid,
     };
     sentinfo.update(&sentkey, &si);
 
@@ -415,6 +421,7 @@ int egress_v4_tcp(struct __sk_buff *ctx) {
     u16 sequence = 0;
     u8 newttl = 0;
     u32 destaddr = htonl(load_word(ctx, NHOFFSET + IP_DST_OFF));
+    u16 outipid = load_half(ctx, NHOFFSET + IP_ID_OFF);
     _decide_seq_ttl(pd, &sequence, &newttl);
     
 #if DEBUG
@@ -510,6 +517,7 @@ int egress_v4_tcp(struct __sk_buff *ctx) {
         .origseq = origseq,
         .outttl = newttl,
         .protocol = IPPROTO_TCP,
+        .outipid = outipid,
     };
     sentinfo.update(&sentkey, &si);
 
@@ -557,6 +565,7 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     _decide_seq_ttl(pd, &sequence, &newttl);
     u16 sport = load_half(ctx, offset + UDP_SRC_OFF);
     u16 dport = load_half(ctx, offset + UDP_DST_OFF);
+    u16 outipid = load_half(ctx, NHOFFSET + IP_ID_OFF);
     
 #if DEBUG
     bpf_trace_printk("EGRESS udp4 outgoing seq %lu origseq 0x%x\n", sequence, origseq);
@@ -705,6 +714,7 @@ int egress_v4_udp(struct __sk_buff *ctx) {
         .origseq = origseq,
         .outttl = newttl,
         .protocol = IPPROTO_UDP,
+        .outipid = outipid,
     };
     sentinfo.update(&sentkey, &si);
 
@@ -934,6 +944,7 @@ int ingress_v4(struct xdp_md *ctx) {
         return XDP_PASS;
     }
     offset = offset + sizeof(struct _iphdr);
+    u16 inipid = iph->id;
 
 #if DEBUG
     bpf_trace_printk("INGRESS ttl exc from 0x%x rttl %d idx %d\n", srcip, recvttl, *val);
@@ -988,6 +999,7 @@ int ingress_v4(struct xdp_md *ctx) {
     latsamp->recvttl = recvttl;
     latsamp->sport = sport;
     latsamp->dport = dport;
+    latsamp->inipid = inipid;
     __builtin_memcpy(&latsamp->responder, &source, sizeof(_in6_addr_t));
     __builtin_memcpy(&latsamp->target, &origdst, sizeof(_in6_addr_t));
     counters.increment(RESULTS_IDX);
@@ -1015,6 +1027,7 @@ int ingress_v4(struct xdp_md *ctx) {
     latsamp->dport = si->dport;
     latsamp->origseq = si->origseq;
     latsamp->protocol = iph->protocol;
+    latsamp->outipid = si->outipid;
 
     sentinfo.delete(&sentkey);      
 #if DEBUG

@@ -64,7 +64,6 @@ def new_address_of_interest(table, a, dinfo):
             dinfo[idx].dest._u._addr8[i] = 0
     table[xaddr] = ctypes.c_uint64(idx)
     dinfo[idx].hop_bitmap = 0
-    dinfo[idx].hop_mask = 0xffff
     dinfo[idx].max_ttl = 16
 
 def _set_bpf_jumptable(bpf, tablename, idx, fnname, progtype):
@@ -157,9 +156,6 @@ def main(args):
     logging.info("start")
     metadata['results'] = []
     resultcount = 0
-    start = time.time()
-    expire = start+1
-    maskon = False
     while True:
         try:
             time.sleep(1)
@@ -171,28 +167,10 @@ def main(args):
                 while resultcount < rc:
                     resultidx = resultcount % MAX_RESULTS
                     res = b['results'][resultidx]
-                    print("latsamp", resultidx, res.sequence, res.origseq, res.recv-res.send, res.send, res.recv, res.sport, res.dport, res.outttl, res.recvttl, to_ipaddr(res.responder), to_ipaddr(res.target), res.protocol)
-                    d = {'seq':res.sequence, 'origseq':res.origseq, 'latency':(res.recv-res.send), 'sendtime':res.send, 'recvtime':res.recv, 'dest':str(to_ipaddr(res.target)), 'responder':str(to_ipaddr(res.responder)), 'outttl':res.outttl, 'recvttl':res.recvttl, 'sport':res.sport, 'dport':res.dport, 'protocol':res.protocol}
+                    print("latsamp", resultidx, res.sequence, res.origseq, res.recv-res.send, res.send, res.recv, res.sport, res.dport, res.outttl, res.recvttl, to_ipaddr(res.responder), to_ipaddr(res.target), res.protocol, res.outipid, res.inipid)
+                    d = {'seq':res.sequence, 'origseq':res.origseq, 'latency':(res.recv-res.send), 'sendtime':res.send, 'recvtime':res.recv, 'dest':str(to_ipaddr(res.target)), 'responder':str(to_ipaddr(res.responder)), 'outttl':res.outttl, 'recvttl':res.recvttl, 'sport':res.sport, 'dport':res.dport, 'protocol':res.protocol, 'outipid':res.outipid, 'inipid':res.inipid}
                     metadata['results'].append(d)
                     resultcount += 1
-
-            now = time.time()
-            if now >= expire:
-                maskon = not maskon
-                mask = 0
-                expire = args.off + now
-                which = "off"
-                if maskon:
-                    mask = 0xffff
-                    expire = args.on + now
-                    which = "on"
-                logging.info("Turning non-responsive hop mask {}".format(which))
-
-                for k,v in b['trie'].items():
-                    idx = v.value
-                    print(idx, destinfo[idx].hop_mask, destinfo[idx].hop_bitmap)
-                    destinfo[idx].hop_mask = mask
-                    print(idx, destinfo[idx].hop_mask, destinfo[idx].hop_bitmap)
 
         except KeyboardInterrupt:
             break
@@ -228,15 +206,15 @@ def main(args):
     for k,v in b['sentinfo'].items():
         idx = k.value >> 32 & 0xffffffff
         seq = k.value & 0xffffffff
-        print("sent", idx, seq, v.origseq, v.send_time, to_ipaddr(v.dest), v.outttl, v.sport, v.dport, v.protocol)
-        d = {'seq':seq, 'origseq':v.origseq, 'sendtime':v.send_time, 'dest':str(to_ipaddr(v.dest)), 'outttl':v.outttl, 'sport':v.sport, 'dport':v.dport, 'recvtime':0, 'responder':'', 'recvttl':-1, 'latency':-1, 'protocol':v.protocol}
+        print("sent", idx, seq, v.origseq, v.send_time, to_ipaddr(v.dest), v.outttl, v.sport, v.dport, v.protocol, v.outipid)
+        d = {'seq':seq, 'origseq':v.origseq, 'sendtime':v.send_time, 'dest':str(to_ipaddr(v.dest)), 'outttl':v.outttl, 'sport':v.sport, 'dport':v.dport, 'recvtime':0, 'responder':'', 'recvttl':-1, 'latency':-1, 'protocol':v.protocol, 'outipid':v.outipid}
         metadata['results'].append(d)
 
     while resultcount < rc:
         resultidx = resultcount % MAX_RESULTS
         res = b['results'][resultidx]
-        print("latsamp", resultidx, res.sequence, res.origseq, res.recv-res.send, res.send, res.recv, res.sport, res.dport, res.outttl, res.recvttl, to_ipaddr(res.responder), to_ipaddr(res.target), res.protocol)
-        d = {'seq':res.sequence, 'origseq':res.origseq, 'latency':(res.recv-res.send), 'sendtime':res.send, 'recvtime':res.recv, 'dest':str(to_ipaddr(res.target)), 'responder':str(to_ipaddr(res.responder)), 'outttl':res.outttl, 'recvttl':res.recvttl, 'sport':res.sport, 'dport':res.dport, 'protocol':res.protocol}
+        print("latsamp", resultidx, res.sequence, res.origseq, res.recv-res.send, res.send, res.recv, res.sport, res.dport, res.outttl, res.recvttl, to_ipaddr(res.responder), to_ipaddr(res.target), res.protocol, res.outipid, res.inipid)
+        d = {'seq':res.sequence, 'origseq':res.origseq, 'latency':(res.recv-res.send), 'sendtime':res.send, 'recvtime':res.recv, 'dest':str(to_ipaddr(res.target)), 'responder':str(to_ipaddr(res.responder)), 'outttl':res.outttl, 'recvttl':res.recvttl, 'sport':res.sport, 'dport':res.dport, 'protocol':res.protocol, 'outipid':res.outipid, 'inipid':res.inipid}
         metadata['results'].append(d)
         resultcount += 1
 
