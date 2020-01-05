@@ -1000,6 +1000,7 @@ int ingress_v4(struct xdp_md *ctx) {
     latsamp->sport = sport;
     latsamp->dport = dport;
     latsamp->inipid = inipid;
+    latsamp->protocol = iph->protocol;
     __builtin_memcpy(&latsamp->responder, &source, sizeof(_in6_addr_t));
     __builtin_memcpy(&latsamp->target, &origdst, sizeof(_in6_addr_t));
     counters.increment(RESULTS_IDX);
@@ -1026,7 +1027,7 @@ int ingress_v4(struct xdp_md *ctx) {
     latsamp->sport = si->sport;
     latsamp->dport = si->dport;
     latsamp->origseq = si->origseq;
-    latsamp->protocol = iph->protocol;
+    latsamp->protocol = si->protocol;
     latsamp->outipid = si->outipid;
 
     sentinfo.delete(&sentkey);      
