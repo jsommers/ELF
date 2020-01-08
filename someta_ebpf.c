@@ -982,16 +982,17 @@ int egress_v6_tcp(struct __sk_buff *ctx) {
         return TC_ACT_SHOT;
     }
 
+    u32 cword = 0;
     // add in pseudoheader words for tcp checksum
 #pragma unroll
     for (int i = 0 ; i < 4; i++) {
-        u32 cword = htonl(load_word(ctx, NHOFFSET + IP6_SRC_OFF + i*4));
+        cword = htonl(load_word(ctx, NHOFFSET + IP6_SRC_OFF + i*4));
         rv = bpf_l4_csum_replace(ctx, NHOFFSET + sizeof(struct _ip6hdr) + TCP_CSUM_OFF, 0, cword, 4 | BPF_F_PSEUDO_HDR);
     }
 
 #pragma unroll
     for (int i = 0 ; i < 4; i++) {
-        u32 cword = htonl(load_word(ctx, NHOFFSET + IP6_DST_OFF));
+        cword = htonl(load_word(ctx, NHOFFSET + IP6_DST_OFF));
         rv = bpf_l4_csum_replace(ctx, NHOFFSET + sizeof(struct _ip6hdr) + TCP_CSUM_OFF, 0, cword, 4 | BPF_F_PSEUDO_HDR);
     }
     cword = htonl(((u32)IPPROTO_TCP << 16) | 20);
