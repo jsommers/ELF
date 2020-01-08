@@ -119,6 +119,10 @@ struct _icmphdr {
 #define IP_LEN_OFF offsetof(struct _iphdr, tot_len)
 #define IP_ID_OFF offsetof(struct _iphdr, id)
 #define IP_CSUM_OFF offsetof(struct _iphdr, check)
+#define IP6_ID_OFF 2
+#define IP6_DEST_OFF offsetof(struct _ip6hdr, daddr)
+#define IP6_SRC_OFF offsetof(struct _ip6hdr, saddr)
+#define IP6_TTL_OFF offsetof(struct _ip6hdr, hop_limit)
 #define ICMP_CSUM_OFF offsetof(struct _icmphdr, icmp_cksum)
 #define ICMP_TYPE_OFF offsetof(struct _icmphdr, icmp_type)
 #define ICMP_ID_OFF offsetof(struct _icmphdr, icmp_reserved[0])
@@ -765,6 +769,121 @@ int egress_v6_icmp(struct __sk_buff *ctx) {
     bpf_trace_printk("EGRESS icmp6 mark %d\n", ctx->mark);
 #endif
 
+    int idx = ctx->mark;
+    struct probe_dest *pd = destinfo.lookup(&idx);
+    if (pd == NULL) {
+        return TC_ACT_OK;
+    }
+
+    //
+    // boilerplate to get a pointer to icmphdr for cloning and 
+    // probe generation
+    //
+    int offset = NHOFFSET;
+    void* data = (void*)(long)ctx->data;
+    void* data_end = (void*)(long)ctx->data_end;
+    if (data + offset + sizeof(struct _ip6hdr) > data_end) {
+        return TC_ACT_OK;
+    }
+    struct _ip6hdr *iph = (struct _ip6hdr*)(data + offset);
+    offset = offset + sizeof(struct _ip6hdr);
+    struct _icmphdr *icmph = (struct _icmphdr*)(data + offset);
+    if (data + offset + sizeof(struct _icmphdr) > data_end) {
+        return TC_ACT_OK;
+    }
+    if (icmph->icmp_type != ICMP6_ECHO_REQUEST) {
+        return TC_ACT_OK;
+    }
+
+    // decide what TTL to use in probe
+    u64 now = bpf_ktime_get_ns();
+    u16 origseq = load_half(ctx, offset + ICMP_SEQ_OFF);
+    u16 outipid = load_half(ctx, NHOFFSET + IP6_ID_OFF); 
+    u16 sport = load_half(ctx, offset + ICMP_TYPE_OFF);
+    u16 dport = load_half(ctx, offset + ICMP_CSUM_OFF);
+    u16 sequence = 0;
+    u8 newttl = 0;
+    _in6_addr_t destaddr;
+    destaddr._u._addr32[0] = load_word(ctx, NHOFFSET + IP6_DST_OFF);
+    destaddr._u._addr32[1] = load_word(ctx, NHOFFSET + IP6_DST_OFF + 4);
+    destaddr._u._addr32[2] = load_word(ctx, NHOFFSET + IP6_DST_OFF + 8);
+    destaddr._u._addr32[3] = load_word(ctx, NHOFFSET + IP6_DST_OFF + 12);
+    _decide_seq_ttl(pd, &sequence, &newttl);
+    
+#if DEBUG
+    bpf_trace_printk("EGRESS icmp6 outgoing seq %lu\n", sequence);
+#endif
+
+    // clone and redirect the original pkt out the intended interface
+    int rv = bpf_clone_redirect(ctx, IFINDEX, 0);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS icmp6 bpf clone ifidx %d failed: %d\n", IFINDEX, rv);
+#endif
+        // if clone fails, just let the packet pass w/o trying to do any modifications below
+        return TC_ACT_OK;
+    }
+#if DEBUG
+    bpf_trace_printk("EGRESS icmp6 after clone emit %lu\n", sequence);
+#endif
+
+    if (data + offset + sizeof(struct _icmphdr) > data_end) {
+        return TC_ACT_SHOT;
+    }
+
+    // FIXME
+    // rewrite new IP ttl
+    rv = bpf_skb_store_bytes(ctx, NHOFFSET + IP6_TTL_OFF, &newttl, sizeof(newttl), 0);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS icmp6 failed to store new hop limit\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+
+    // rewrite seq in ICMP hdr
+    u16 oldseq = load_half(ctx, offset + ICMP_SEQ_OFF);
+    u16 newseq = htons(sequence);
+    rv = bpf_skb_store_bytes(ctx, offset + ICMP_SEQ_OFF, &newseq, sizeof(newseq), 0);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS icmp6 failed to store new icmp seq\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+    newseq = ntohs(newseq);
+
+    // fixup ICMP checksum
+    u16 oldcsum = load_half(ctx, offset + ICMP_CSUM_OFF);
+    u16 newcsum = oldcsum - (newseq - oldseq); 
+    newcsum = htons(newcsum);
+    rv = bpf_skb_store_bytes(ctx, offset + ICMP_CSUM_OFF, &newcsum, sizeof(newcsum), 0);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS icmp6 failed to store new icmp csum\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+
+    // save info about outgoing probe into hash
+    // hashed on: idx|sequence
+    pd->last_send = now;
+    u64 sentkey = (u64)idx << 32 | (u64)sequence;
+    struct sent_info si = {
+        .send_time = now,
+        .dest = destaddr,
+        .sport = sport,
+        .dport = dport,
+        .origseq = origseq,
+        .outttl = newttl,
+        .protocol = IPPROTO_ICMP6,
+        .outipid = outipid,
+    };
+    sentinfo.update(&sentkey, &si);
+
+#if DEBUG
+    bpf_trace_printk("EGRESS icmp6 emitting probe %lu\n", sequence);
+#endif
     return TC_ACT_OK;
 }
 
@@ -799,7 +918,7 @@ int egress_v6(struct __sk_buff *ctx) {
     // dest addr matches a destination of interest
     int idx = (int)*val;
 #ifdef DEBUG
-    bpf_trace_printk("egress v6 dest of interest -- idx %d, currmark %d\n", idx, ctx->mark);
+    bpf_trace_printk("EGRESS v6 dest of interest -- idx %d, currmark %d\n", idx, ctx->mark);
 #endif
     // store idx in ctx for future reference
     ctx->mark = idx;
@@ -808,7 +927,7 @@ int egress_v6(struct __sk_buff *ctx) {
         return TC_ACT_OK;
     }
 #ifdef DEBUG
-    bpf_trace_printk("egress v6 should probe -- idx %d\n", idx);
+    bpf_trace_printk("EGRESS v6 should probe -- idx %d\n", idx);
 #endif
 
     // jump to code to handle egress v6 for icmp/tcp/udp
@@ -823,7 +942,7 @@ int egress_path(struct __sk_buff *ctx) {
 
     if (ctx->mark != 0) {
 #if DEBUG
-        bpf_trace_printk("ignoring packet that we've already cloned\n");
+        bpf_trace_printk("EGRESS ignoring packet that we've already cloned\n");
 #endif
         return TC_ACT_OK;
     }
@@ -952,11 +1071,11 @@ int ingress_v4(struct xdp_md *ctx) {
 
     // sequence offset if relative to end of IP header
     int sequence_offset = 0;
-    if (iph->protocol == 1) {
+    if (iph->protocol == IPPROTO_ICMP) {
         sequence_offset = ICMP_SEQ_OFF;
-    } else if (iph->protocol == 6) {
+    } else if (iph->protocol == IPPROTO_TCP) {
         sequence_offset = TCP_SEQ_OFF + 2;
-    } else if (iph->protocol == 17) {
+    } else if (iph->protocol == IPPROTO_UDP) {
         sequence_offset = UDP_CSUM_OFF;
     }
     if (data + offset + 8 > data_end) {
@@ -1034,6 +1153,7 @@ int ingress_v4(struct xdp_md *ctx) {
 #if DEBUG
     bpf_trace_printk("INGRESS recorded new latency sample idx %d\n", new_results);
 #endif
+
     return XDP_DROP;
 }
 
@@ -1064,7 +1184,7 @@ int ingress_v6(struct xdp_md *ctx) {
     }
 
 #ifdef DEBUG
-    bpf_trace_printk("INGRESS ICMP6 from %lx:%lx:", ntohl(source._u._addr32[0]), ntohl(source._u._addr32[1]));
+    bpf_trace_printk("INGRESS icmp6 from %lx:%lx:", ntohl(source._u._addr32[0]), ntohl(source._u._addr32[1]));
     bpf_trace_printk("%lx:%lx\n", ntohl(source._u._addr32[2]), ntohl(source._u._addr32[3]));
 #endif
     offset = offset + sizeof(struct _ip6hdr);
@@ -1088,6 +1208,7 @@ int ingress_v6(struct xdp_md *ctx) {
         inner_pktlen = sizeof(struct _ip6hdr) + 8;
     }
 
+    int outerlen = ntohs(iph->payload_length);
     offset = offset + sizeof(struct _icmphdr);
     // save srcip and ttl from outer IP header
     _in6_addr_t srcip = iph->saddr;
@@ -1096,20 +1217,112 @@ int ingress_v6(struct xdp_md *ctx) {
         return XDP_PASS;
     }
 #ifdef DEBUG
-    bpf_trace_printk("INGRESS icmp6 time exceeded from dest of interest\n");
+    bpf_trace_printk("INGRESS icmp6 time exceeded from dest of interest, len %d\n", outerlen);
 #endif
     // the *inner* v6 header returned by some router where the packet died
     iph = (struct _ip6hdr*)(data + offset);
     _in6_addr_t origdst = iph->daddr;
+    u16 inipid = iph->ip6_un1_flow >> 16;
     val = NULL;
     if ((val = trie.lookup(&origdst)) == NULL) {
         return XDP_PASS;
     }
 
 #if DEBUG
-    bpf_trace_printk("INGRESS ttl exc from 0x%x rttl %d\n", srcip._u._addr32[0], recvttl);
+    bpf_trace_printk("INGRESS icmp6 ttl exc from idx 0x%lx rttl %d\n", *val, recvttl);
 #endif
 
-    return XDP_PASS;
-}
+    // sequence offset if relative to end of IP header
+    int sequence_offset = 0;
+    if (iph->protocol == IPPROTO_ICMP6) {
+        sequence_offset = ICMP_SEQ_OFF;
+    } else if (iph->protocol == IPPROTO_TCP) {
+        sequence_offset = TCP_SEQ_OFF + 2;
+    } else if (iph->protocol == IPPROTO_UDP) {
+        sequence_offset = UDP_CSUM_OFF;
+    }
+    if (data + offset + 8 > data_end) {
+#if DEBUG
+        bpf_trace_printk("INGRESS icmp6 not enough data to get sequence\n");
+#endif
+        return XDP_DROP;
+    }
+#if DEBUG
+        bpf_trace_printk("INGRESS icmp6 past length check\n");
+#endif
 
+    u16 seq = *(u16*)(data + offset + sequence_offset);
+    seq = ntohs(seq);
+    u16 sport = *(u16*)(data + offset);
+    sport = ntohs(sport);
+    u16 dport = *(u16*)(data + offset + 2);
+    dport = ntohs(dport);
+#if DEBUG
+    bpf_trace_printk("INGRESS icmp6 seq %d proto %d from %d received\n", seq, iph->protocol, *val);
+#endif
+
+    // record received probe
+    u64 reskey = RESULTS_IDX;
+    u64 zero = 0ULL;
+    u64 *resultsidx = counters.lookup_or_init(&reskey, &zero);
+    if (resultsidx == NULL) {
+#if DEBUG
+        bpf_trace_printk("INGRESS icmp6 failed to get results idx\n");
+#endif
+        return XDP_DROP;
+    }
+#if DEBUG
+    bpf_trace_printk("INGRESS icmp6 got results index %llu\n", *resultsidx);
+#endif
+    int new_results = (int)*resultsidx;
+    new_results = new_results % MAXRESULTS;
+    struct latency_sample *latsamp = results.lookup(&new_results);
+    if (latsamp == NULL) {
+        return XDP_DROP;
+    }
+#if DEBUG
+    bpf_trace_printk("INGRESS icmp6 got lat sample ptr\n");
+#endif
+    latsamp->sequence = seq;
+    latsamp->recv = bpf_ktime_get_ns();
+    latsamp->recvttl = recvttl;
+    latsamp->sport = sport;
+    latsamp->dport = dport;
+    latsamp->inipid = inipid;
+    latsamp->protocol = iph->protocol;
+    __builtin_memcpy(&latsamp->responder, &source, sizeof(_in6_addr_t));
+    __builtin_memcpy(&latsamp->target, &origdst, sizeof(_in6_addr_t));
+    counters.increment(RESULTS_IDX);
+
+    u64 sentkey = (u64)*val << 32 | (u64)seq;
+    struct sent_info *si = sentinfo.lookup(&sentkey);
+    if (si == NULL) {
+        return XDP_DROP;
+    }
+#if DEBUG
+    bpf_trace_printk("INGRESS icmp6 got sentinfo sample ptr\n");
+#endif
+
+    // update bitmap to show hop as responsive
+    int idx = *val;
+    struct probe_dest *pd = destinfo.lookup(&idx);
+    if (pd != NULL) {
+        u32 newbit = 1 << (si->outttl-1); 
+        pd->hop_bitmap = pd->hop_bitmap | newbit;
+    }
+
+    latsamp->send = si->send_time;
+    latsamp->outttl = si->outttl;
+    latsamp->sport = si->sport;
+    latsamp->dport = si->dport;
+    latsamp->origseq = si->origseq;
+    latsamp->protocol = si->protocol;
+    latsamp->outipid = si->outipid;
+
+    sentinfo.delete(&sentkey);      
+#if DEBUG
+    bpf_trace_printk("INGRESS icmp6 recorded new latency sample idx %d\n", new_results);
+#endif
+
+    return XDP_DROP;
+}
