@@ -147,10 +147,10 @@ def main(args):
     for idx,fnname in [(4,'egress_v4'), (6, 'egress_v6')]:
         _set_bpf_jumptable(b, 'egress_layer3', idx, fnname, BPF.SCHED_CLS)
 
-    for idx,fnname in [(1, 'egress_v4_icmp'), (6, 'egress_v4_tcp'), (17, 'egress_v4_udp')]:
+    for idx,fnname in [(socket.IPPROTO_ICMP, 'egress_v4_icmp'), (socket.IPPROTO_TCP, 'egress_v4_tcp'), (socket.IPPROTO_UDP, 'egress_v4_udp')]:
         _set_bpf_jumptable(b, 'egress_v4_proto', idx, fnname, BPF.SCHED_CLS)
 
-    for idx,fnname in [(1, 'egress_v6_icmp'), (6, 'egress_v6_tcp'), (17, 'egress_v6_udp')]:
+    for idx,fnname in [(socket.IPPROTO_ICMPV6, 'egress_v6_icmp'), (socket.IPPROTO_TCP, 'egress_v6_tcp'), (socket.IPPROTO_UDP, 'egress_v6_udp')]:
         _set_bpf_jumptable(b, 'egress_v6_proto', idx, fnname, BPF.SCHED_CLS)
 
     logging.info("start")

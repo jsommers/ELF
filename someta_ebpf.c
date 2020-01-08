@@ -120,9 +120,10 @@ struct _icmphdr {
 #define IP_ID_OFF offsetof(struct _iphdr, id)
 #define IP_CSUM_OFF offsetof(struct _iphdr, check)
 #define IP6_ID_OFF 2
-#define IP6_DEST_OFF offsetof(struct _ip6hdr, daddr)
+#define IP6_DST_OFF offsetof(struct _ip6hdr, daddr)
 #define IP6_SRC_OFF offsetof(struct _ip6hdr, saddr)
 #define IP6_TTL_OFF offsetof(struct _ip6hdr, hop_limit)
+#define IP6_LEN_OFF offsetof(struct _ip6hdr, payload_length)
 #define ICMP_CSUM_OFF offsetof(struct _icmphdr, icmp_cksum)
 #define ICMP_TYPE_OFF offsetof(struct _icmphdr, icmp_type)
 #define ICMP_ID_OFF offsetof(struct _icmphdr, icmp_reserved[0])
@@ -409,12 +410,10 @@ int egress_v4_tcp(struct __sk_buff *ctx) {
     struct _iphdr *iph = (struct _iphdr*)(data + offset);
     int iphlen = (iph->verihl&0x0f) << 2;
     offset = offset + iphlen;
-    /*
     struct _tcphdr *tcph = (struct _tcphdr*)(data + offset);
     if (data + offset + sizeof(struct _tcphdr) > data_end) {
         return TC_ACT_OK;
     }
-    */
 
     // decide what TTL to use in probe
     u16 sport = load_half(ctx, offset + TCP_SRC_OFF);
@@ -891,6 +890,142 @@ int egress_v6_tcp(struct __sk_buff *ctx) {
 #if DEBUG
     bpf_trace_printk("EGRESS tcp6 mark %d\n", ctx->mark);
 #endif
+
+    int idx = ctx->mark;
+    struct probe_dest *pd = destinfo.lookup(&idx);
+    if (pd == NULL) {
+        return TC_ACT_OK;
+    }
+
+    //
+    // boilerplate to get a pointer to tcphdr for cloning and 
+    // probe generation
+    //
+    int offset = NHOFFSET;
+    void* data = (void*)(long)ctx->data;
+    void* data_end = (void*)(long)ctx->data_end;
+    if (data + offset + sizeof(struct _ip6hdr) > data_end) {
+        return TC_ACT_OK;
+    }
+    struct _ip6hdr *iph = (struct _ip6hdr*)(data + offset);
+    offset = offset + sizeof(struct _ip6hdr);
+    struct _tcphdr *tcph = (struct _tcphdr*)(data + offset);
+    if (data + offset + sizeof(struct _tcphdr) > data_end) {
+        return TC_ACT_OK;
+    }
+
+    // decide what TTL to use in probe
+    u16 sport = load_half(ctx, offset + TCP_SRC_OFF);
+    u16 dport = load_half(ctx, offset + TCP_DST_OFF);
+
+    u64 now = bpf_ktime_get_ns();
+    u32 origseq = ntohs(load_word(ctx, offset + TCP_SEQ_OFF));
+    u16 sequence = 0;
+    u8 newttl = 0;
+    _in6_addr_t destaddr;
+#pragma unroll
+    for (int i = 0; i < 4; i++) {
+        destaddr._u._addr32[i] = htonl(load_word(ctx, NHOFFSET + IP6_DST_OFF + i*4));
+    }
+
+    u16 outipid = load_half(ctx, NHOFFSET + IP6_ID_OFF);
+    _decide_seq_ttl(pd, &sequence, &newttl);
+    
+#if DEBUG
+    bpf_trace_printk("EGRESS tcp6 outgoing seq %lu\n", sequence);
+#endif
+
+    // clone and redirect the original pkt out the intended interface
+    int rv = bpf_clone_redirect(ctx, IFINDEX, 0);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS tcp6 bpf clone ifidx %d failed: %d\n", IFINDEX, rv);
+#endif
+        // if clone fails, just let the packet pass w/o trying to do any modifications below
+        return TC_ACT_OK;
+    }
+#ifdef DEBUG
+    bpf_trace_printk("EGRESS tcp6 after clone emit %lu\n", sequence);
+#endif
+
+    struct _tcphdr newtcp;
+    __builtin_memset(&newtcp, 0, sizeof(struct _tcphdr));
+    newtcp.th_sport = htons(sport);
+    newtcp.th_dport = htons(dport);
+    newtcp.th_seq = htonl(sequence);
+    newtcp.th_ack = htonl(load_word(ctx, NHOFFSET + sizeof(struct _ip6hdr) + TCP_ACK_OFF));
+    newtcp.th_off = 0x50;
+    newtcp.th_flags = TH_ACK;
+
+    // get current header values 
+    u16 curr_ip_len = load_half(ctx, NHOFFSET + IP6_LEN_OFF);
+    u16 new_ip_len = sizeof(struct _tcphdr);
+
+#if DEBUG
+    bpf_trace_printk("EGRESS tcp6 truncating pkt from %d to %d\n", curr_ip_len, new_ip_len);
+#endif
+
+    // truncate packet
+    rv = bpf_skb_change_tail(ctx, NHOFFSET + sizeof(struct _ip6hdr) + new_ip_len, 0);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS tcp6 bpf trunc packet failed\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+
+    rv = bpf_skb_store_bytes(ctx, NHOFFSET + sizeof(struct _ip6hdr), &newtcp, sizeof(struct _tcphdr), 0);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS tcp6 bpf store new tcp hdr failed\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+
+    // add in pseudoheader words for tcp checksum
+#pragma unroll
+    for (int i = 0 ; i < 4; i++) {
+        u32 cword = htonl(load_word(ctx, NHOFFSET + IP6_SRC_OFF + i*4));
+        rv = bpf_l4_csum_replace(ctx, NHOFFSET + sizeof(struct _ip6hdr) + TCP_CSUM_OFF, 0, cword, 4 | BPF_F_PSEUDO_HDR);
+    }
+
+#pragma unroll
+    for (int i = 0 ; i < 4; i++) {
+        u32 cword = htonl(load_word(ctx, NHOFFSET + IP6_DST_OFF));
+        rv = bpf_l4_csum_replace(ctx, NHOFFSET + sizeof(struct _ip6hdr) + TCP_CSUM_OFF, 0, cword, 4 | BPF_F_PSEUDO_HDR);
+    }
+    cword = htonl(((u32)IPPROTO_TCP << 16) | 20);
+    rv = bpf_l4_csum_replace(ctx, NHOFFSET + sizeof(struct _ip6hdr) + TCP_CSUM_OFF, 0, cword, 4 | BPF_F_PSEUDO_HDR);
+
+    rv = bpf_skb_store_bytes(ctx, NHOFFSET + IP6_LEN_OFF, &new_ip_len, sizeof(new_ip_len), 0);
+
+    rv = bpf_skb_store_bytes(ctx, NHOFFSET + IP6_TTL_OFF, &newttl, sizeof(newttl), 0);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS tcp6 failed to store new ttl/proto\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+
+    // save info about outgoing probe into hash
+    // hashed on: idx|sequence
+    pd->last_send = now;
+    u64 sentkey = (u64)idx << 32 | (u64)sequence;
+    struct sent_info si = {
+        .send_time = now,
+        .dest = destaddr,
+        .sport = sport,
+        .dport = dport,
+        .origseq = origseq,
+        .outttl = newttl,
+        .protocol = IPPROTO_TCP,
+        .outipid = outipid,
+    };
+    sentinfo.update(&sentkey, &si);
+
+#if DEBUG
+    bpf_trace_printk("EGRESS tcp6 emitting probe %llu\n", sequence);
+#endif
     return TC_ACT_OK;
 }
 
@@ -898,6 +1033,91 @@ int egress_v6_udp(struct __sk_buff *ctx) {
 #if DEBUG
     bpf_trace_printk("EGRESS udp6 mark %d\n", ctx->mark);
 #endif
+
+    int idx = ctx->mark;
+    struct probe_dest *pd = destinfo.lookup(&idx);
+    if (pd == NULL) {
+        return TC_ACT_OK;
+    }
+
+    //
+    // boilerplate to get a pointer to udphdr for cloning and 
+    // probe generation
+    //
+    int offset = NHOFFSET;
+    void* data = (void*)(long)ctx->data;
+    void* data_end = (void*)(long)ctx->data_end;
+    if (data + offset + sizeof(struct _ip6hdr) > data_end) {
+        return TC_ACT_OK;
+    }
+    struct _ip6hdr *iph = (struct _ip6hdr*)(data + offset);
+    offset = offset + sizeof(struct _ip6hdr);
+    if (data + offset + sizeof(struct _udphdr) > data_end) {
+        return TC_ACT_OK;
+    }
+    struct _udphdr *udph = (struct _udphdr*)(data + offset);
+
+    // decide what TTL to use in probe
+    u64 now = bpf_ktime_get_ns();
+    u16 origseq = load_half(ctx, offset + UDP_CSUM_OFF);
+    u16 sequence = 0;
+    u8 newttl = 0;
+    _in6_addr_t destaddr;
+#pragma unroll
+    for (int i = 0; i < 4; i++) {
+        destaddr._u._addr32[i] = htonl(load_word(ctx, NHOFFSET + IP6_DST_OFF + i*4));
+    }
+    _decide_seq_ttl(pd, &sequence, &newttl);
+    u16 sport = load_half(ctx, offset + UDP_SRC_OFF);
+    u16 dport = load_half(ctx, offset + UDP_DST_OFF);
+    u16 outipid = load_half(ctx, NHOFFSET + IP6_ID_OFF);
+    
+#if DEBUG
+    bpf_trace_printk("EGRESS udp6 outgoing seq %lu origseq 0x%x\n", sequence, origseq);
+#endif
+
+    // clone and redirect the original pkt out the intended interface
+    int rv = bpf_clone_redirect(ctx, IFINDEX, 0);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS udp6 bpf clone ifidx %d failed: %d\n", IFINDEX, rv);
+#endif
+        // if clone fails, just let the packet pass w/o trying to do any modifications below
+        return TC_ACT_OK;
+    }
+
+#ifdef DEBUG
+    bpf_trace_printk("EGRESS udp6 after clone emit %lu\n", sequence);
+#endif
+
+    rv = bpf_skb_store_bytes(ctx, NHOFFSET + IP6_TTL_OFF, &newttl, sizeof(newttl), 0);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS udp6 failed to store new ttl/proto\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+
+    // save info about outgoing probe into hash
+    // hashed on: idx|sequence
+    pd->last_send = now;
+    u64 sentkey = (u64)idx << 32 | (u64)sequence;
+    struct sent_info si = {
+        .send_time = now,
+        .dest = destaddr,
+        .sport = sport,
+        .dport = dport,
+        .origseq = origseq,
+        .outttl = newttl,
+        .protocol = IPPROTO_UDP,
+        .outipid = outipid,
+    };
+    sentinfo.update(&sentkey, &si);
+
+#if DEBUG
+    bpf_trace_printk("EGRESS udp6 emitting probe %llu\n", sequence);
+#endif
+
     return TC_ACT_OK;
 }
 
