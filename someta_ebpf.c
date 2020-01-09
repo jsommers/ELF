@@ -998,6 +998,7 @@ int egress_v6_tcp(struct __sk_buff *ctx) {
     cword = htonl(((u32)IPPROTO_TCP << 16) | 20);
     rv = bpf_l4_csum_replace(ctx, NHOFFSET + sizeof(struct _ip6hdr) + TCP_CSUM_OFF, 0, cword, 4 | BPF_F_PSEUDO_HDR);
 
+    new_ip_len = htons(new_ip_len);
     rv = bpf_skb_store_bytes(ctx, NHOFFSET + IP6_LEN_OFF, &new_ip_len, sizeof(new_ip_len), 0);
 
     rv = bpf_skb_store_bytes(ctx, NHOFFSET + IP6_TTL_OFF, &newttl, sizeof(newttl), 0);
@@ -1547,3 +1548,4 @@ int ingress_v6(struct xdp_md *ctx) {
 
     return XDP_DROP;
 }
+
