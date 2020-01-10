@@ -423,7 +423,7 @@ int egress_v4_tcp(struct __sk_buff *ctx) {
     u32 origseq = ntohs(load_word(ctx, offset + TCP_SEQ_OFF));
     u16 sequence = 0;
     u8 newttl = 0;
-    u32 destaddr = htonl(load_word(ctx, NHOFFSET + IP_DST_OFF));
+    u32 destaddr = load_word(ctx, NHOFFSET + IP_DST_OFF);
     u16 outipid = load_half(ctx, NHOFFSET + IP_ID_OFF);
     _decide_seq_ttl(pd, &sequence, &newttl);
     
@@ -564,7 +564,7 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     u16 origseq = load_half(ctx, offset + UDP_CSUM_OFF);
     u16 sequence = 0;
     u8 newttl = 0;
-    u32 destaddr = htonl(load_word(ctx, NHOFFSET + IP_DST_OFF));
+    u32 destaddr = load_word(ctx, NHOFFSET + IP_DST_OFF);
     _decide_seq_ttl(pd, &sequence, &newttl);
     u16 sport = load_half(ctx, offset + UDP_SRC_OFF);
     u16 dport = load_half(ctx, offset + UDP_DST_OFF);
@@ -803,10 +803,10 @@ int egress_v6_icmp(struct __sk_buff *ctx) {
     u16 sequence = 0;
     u8 newttl = 0;
     _in6_addr_t destaddr;
-    destaddr._u._addr32[0] = load_word(ctx, NHOFFSET + IP6_DST_OFF);
-    destaddr._u._addr32[1] = load_word(ctx, NHOFFSET + IP6_DST_OFF + 4);
-    destaddr._u._addr32[2] = load_word(ctx, NHOFFSET + IP6_DST_OFF + 8);
-    destaddr._u._addr32[3] = load_word(ctx, NHOFFSET + IP6_DST_OFF + 12);
+#pragma unroll
+    for (int i = 0; i < 4; i++) {
+        destaddr._u._addr32[i] = load_word(ctx, NHOFFSET + IP6_DST_OFF + i*4);
+    }
     _decide_seq_ttl(pd, &sequence, &newttl);
     
 #if DEBUG
@@ -923,9 +923,17 @@ int egress_v6_tcp(struct __sk_buff *ctx) {
     u16 sequence = 0;
     u8 newttl = 0;
     _in6_addr_t destaddr;
+    u32 cksum32 = 0;
+
 #pragma unroll
     for (int i = 0; i < 4; i++) {
-        destaddr._u._addr32[i] = htonl(load_word(ctx, NHOFFSET + IP6_DST_OFF + i*4));
+        destaddr._u._addr32[i] = load_word(ctx, NHOFFSET + IP6_DST_OFF + i*4);
+    }
+
+#pragma unroll
+    for (int i = 0; i < 8; i++) {
+        cksum32 += load_half(ctx, NHOFFSET + IP6_DST_OFF + i*2);
+        cksum32 += load_half(ctx, NHOFFSET + IP6_SRC_OFF + i*2);
     }
 
     u16 outipid = load_half(ctx, NHOFFSET + IP6_ID_OFF);
@@ -957,6 +965,20 @@ int egress_v6_tcp(struct __sk_buff *ctx) {
     newtcp.th_off = 0x50;
     newtcp.th_flags = TH_ACK;
 
+    cksum32 += 20; // pseudoheader length
+    cksum32 += IPPROTO_TCP; // pseudoheader next header
+    cksum32 += sport;
+    cksum32 += dport;
+    cksum32 += sequence;
+    cksum32 += load_half(ctx, NHOFFSET + sizeof(struct _ip6hdr) + TCP_ACK_OFF);
+    cksum32 += load_half(ctx, NHOFFSET + sizeof(struct _ip6hdr) + TCP_ACK_OFF + 2);
+    cksum32 += 0x5010; // offset + flags
+    cksum32  = (cksum32 >> 16) + (cksum32 & 0xffff);
+    cksum32 += (cksum32 >> 16);
+    u16 cksum16 = ntohs(~cksum32 & 0xffff);
+    bpf_trace_printk("EGRESS tcp6 my checksum 0x%x\n", cksum16);
+    newtcp.th_sum = cksum16;
+
     // get current header values 
     u16 curr_ip_len = load_half(ctx, NHOFFSET + IP6_LEN_OFF);
     u16 new_ip_len = sizeof(struct _tcphdr);
@@ -982,6 +1004,7 @@ int egress_v6_tcp(struct __sk_buff *ctx) {
         return TC_ACT_SHOT;
     }
 
+/*
     u32 cword = 0;
     // add in pseudoheader words for tcp checksum
 #pragma unroll
@@ -995,8 +1018,12 @@ int egress_v6_tcp(struct __sk_buff *ctx) {
         cword = htonl(load_word(ctx, NHOFFSET + IP6_DST_OFF));
         rv = bpf_l4_csum_replace(ctx, NHOFFSET + sizeof(struct _ip6hdr) + TCP_CSUM_OFF, 0, cword, 4 | BPF_F_PSEUDO_HDR);
     }
-    cword = htonl(((u32)IPPROTO_TCP << 16) | 20);
+    cword = htonl((u32)IPPROTO_TCP);
     rv = bpf_l4_csum_replace(ctx, NHOFFSET + sizeof(struct _ip6hdr) + TCP_CSUM_OFF, 0, cword, 4 | BPF_F_PSEUDO_HDR);
+
+    cword = htonl((u32)0x00000014); // 20 bytes header len
+    rv = bpf_l4_csum_replace(ctx, NHOFFSET + sizeof(struct _ip6hdr) + TCP_CSUM_OFF, 0, cword, 4 | BPF_F_PSEUDO_HDR);
+    */
 
     new_ip_len = htons(new_ip_len);
     rv = bpf_skb_store_bytes(ctx, NHOFFSET + IP6_LEN_OFF, &new_ip_len, sizeof(new_ip_len), 0);
@@ -1067,7 +1094,7 @@ int egress_v6_udp(struct __sk_buff *ctx) {
     _in6_addr_t destaddr;
 #pragma unroll
     for (int i = 0; i < 4; i++) {
-        destaddr._u._addr32[i] = htonl(load_word(ctx, NHOFFSET + IP6_DST_OFF + i*4));
+        destaddr._u._addr32[i] = load_word(ctx, NHOFFSET + IP6_DST_OFF + i*4);
     }
     _decide_seq_ttl(pd, &sequence, &newttl);
     u16 sport = load_half(ctx, offset + UDP_SRC_OFF);
@@ -1342,8 +1369,13 @@ int ingress_v4(struct xdp_md *ctx) {
     latsamp->dport = dport;
     latsamp->inipid = inipid;
     latsamp->protocol = iph->protocol;
-    __builtin_memcpy(&latsamp->responder, &source, sizeof(_in6_addr_t));
-    __builtin_memcpy(&latsamp->target, &origdst, sizeof(_in6_addr_t));
+#pragma unroll
+    for (int i = 0; i < 4; i++) {
+        latsamp->responder._u._addr32[i] = htonl(source._u._addr32[i]);
+        latsamp->target._u._addr32[i] = htonl(origdst._u._addr32[i]);
+    }
+    // __builtin_memcpy(&latsamp->responder, &source, sizeof(_in6_addr_t));
+    // __builtin_memcpy(&latsamp->target, &origdst, sizeof(_in6_addr_t));
     counters.increment(RESULTS_IDX);
 
     u64 sentkey = (u64)*val << 32 | (u64)seq;
@@ -1512,8 +1544,13 @@ int ingress_v6(struct xdp_md *ctx) {
     latsamp->dport = dport;
     latsamp->inipid = inipid;
     latsamp->protocol = iph->protocol;
-    __builtin_memcpy(&latsamp->responder, &source, sizeof(_in6_addr_t));
-    __builtin_memcpy(&latsamp->target, &origdst, sizeof(_in6_addr_t));
+#pragma unroll
+    for (int i = 0; i < 4; i++) {
+        latsamp->responder._u._addr32[i] = htonl(source._u._addr32[i]);
+        latsamp->target._u._addr32[i] = htonl(origdst._u._addr32[i]);
+    }
+    // __builtin_memcpy(&latsamp->responder, &source, sizeof(_in6_addr_t));
+    // __builtin_memcpy(&latsamp->target, &origdst, sizeof(_in6_addr_t));
     counters.increment(RESULTS_IDX);
 
     u64 sentkey = (u64)*val << 32 | (u64)seq;

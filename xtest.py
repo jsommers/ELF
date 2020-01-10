@@ -38,11 +38,11 @@ def to_ipaddr(obj):
     '''
     if obj._u._addr32[3] == 0:
         # ip4
-        return ipaddress.IPv4Address(socket.ntohl(obj._u._addr32[0]))
+        return ipaddress.IPv4Address(obj._u._addr32[0])
     else:
         i = obj._u._addr32[0]
         for j in range(1, 4):
-            i = i << 32 | socket.ntohl(obj._u._addr32[j])
+            i = i << 32 | obj._u._addr32[j]
         return ipaddress.IPv6Address(i)
 
 def new_address_of_interest(table, a, dinfo):
