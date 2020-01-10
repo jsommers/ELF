@@ -106,7 +106,8 @@ def main(args):
     bcc_debugflag = 0     
     if args.debug:
         cflags.append('-DDEBUG=1')
-        bcc_debugflag = bcc.DEBUG_BPF_REGISTER_STATE | bcc.DEBUG_SOURCE | bcc.DEBUG_BPF | bcc.DEBUG_LLVM_IR
+        # bcc_debugflag = bcc.DEBUG_BPF_REGISTER_STATE | bcc.DEBUG_SOURCE | bcc.DEBUG_BPF | bcc.DEBUG_LLVM_IR
+        bcc_debugflag = bcc.DEBUG_SOURCE
 
     b = BPF(src_file='someta_ebpf.c', debug=bcc_debugflag, cflags=cflags)
 
