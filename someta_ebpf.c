@@ -607,93 +607,6 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     bpf_trace_printk("EGRESS udp4 after clone emit %lu\n", sequence);
 #endif
 
-    // get current header values 
-    // u16 curr_ip_len = load_half(ctx, NHOFFSET + IP_LEN_OFF);
-    // u16 new_ip_len = iphlen + sizeof(struct _udphdr) + 2;
-
-/*
-#if DEBUG
-    bpf_trace_printk("EGRESS tcp4 truncating pkt from %d to %d\n", curr_ip_len, new_ip_len);
-#endif
-*/
-
-    /*
-    // truncate packet
-    rv = bpf_skb_change_tail(ctx, NHOFFSET + new_ip_len, 0);
-    if (rv < 0) {
-#if DEBUG
-        bpf_trace_printk("EGRESS bpf trunc packet failed\n");
-#endif  
-        return TC_ACT_SHOT;
-    }
-
-    rv = bpf_skb_store_bytes(ctx, NHOFFSET + iphlen, &newudp, sizeof(struct _udphdr), 0);
-    if (rv < 0) {
-#if DEBUG
-        bpf_trace_printk("EGRESS udp4 bpf store new udp hdr failed\n");
-#endif
-        return TC_ACT_SHOT;
-    }
-    */
-
-    /*
-    // add in pseudoheader words for udp checksum
-    // u32 cword = htonl(load_word(ctx, NHOFFSET + IP_SRC_OFF));
-    // rv = bpf_l4_csum_replace(ctx, NHOFFSET + iphlen + TCP_CSUM_OFF, 0, cword, 4 | BPF_F_PSEUDO_HDR);
-    // cword = htonl(load_word(ctx, NHOFFSET + IP_DST_OFF));
-    // rv = bpf_l4_csum_replace(ctx, NHOFFSET + iphlen + TCP_CSUM_OFF, 0, cword, 4 | BPF_F_PSEUDO_HDR);
-    // cword = htonl(((u32)IPPROTO_UDP << 16) | 10);
-    // rv = bpf_l4_csum_replace(ctx, NHOFFSET + iphlen + TCP_CSUM_OFF, 0, cword, 4 | BPF_F_PSEUDO_HDR);
-
-    u32 hword_sum = htons(sport);
-    hword_sum += htons(dport);
-    hword_sum += htons(uhlen);
-    hword_sum += htonl(load_word(ctx, NHOFFSET + IP_SRC_OFF));
-    hword_sum += htonl(load_word(ctx, NHOFFSET + IP_DST_OFF));
-    hword_sum += htonl(((u32)IPPROTO_UDP << 16) | uhlen);
-    hword_sum += htons((u16)sequence);
-    hword_sum = (hword_sum >> 16) + (hword_sum & 0xffff);
-    hword_sum += (hword_sum >> 16);
-    u16 extra_halfword = ntohs(~hword_sum & 0xffff);
-#if DEBUG
-    bpf_trace_printk("EGRESS udp4 checksum sport 0x%x dport 0x%x\n", htons(sport), htons(dport));
-    bpf_trace_printk("EGRESS udp4 checksum uhlen 0x%x protolen 0x%x\n", htons(uhlen), htonl(((u32)IPPROTO_UDP << 16) | uhlen));
-    bpf_trace_printk("EGRESS udp4 checksum ipsrc 0x%x ipdst 0x%x\n", htonl(load_word(ctx, NHOFFSET + IP_SRC_OFF)), htonl(load_word(ctx, NHOFFSET + IP_DST_OFF)));
-    bpf_trace_printk("EGRESS udp4 checksum seq 0x%x ehalfword 0x%x\n", htons((u16)sequence), extra_halfword);
-#endif
-
-    if (data + offset + sizeof(struct _udphdr) + 2 > data_end) {
-        return TC_ACT_SHOT;
-    }
-
-    u16 payload_halfword = load_half(ctx, NHOFFSET + iphlen + sizeof(struct _udphdr));
-    origseq -= payload_halfword;
-    origseq -= sequence;
-
-    rv = bpf_skb_store_bytes(ctx, NHOFFSET + iphlen + sizeof(struct _udphdr), &origseq, 2, 0);
-    if (rv < 0) {
-#if DEBUG
-        bpf_trace_printk("EGRESS udp4 failed to store udp payload bytes to force csum\n");
-#endif
-        return TC_ACT_SHOT;
-    }
-    sequence = htons(sequence);
-    rv = bpf_skb_store_bytes(ctx, NHOFFSET + iphlen + UDP_CSUM_OFF, &sequence, sizeof(sequence), 0);
-    if (rv < 0) {
-#if DEBUG
-        bpf_trace_printk("EGRESS udp4 failed to store udp new csum\n");
-#endif
-        return TC_ACT_SHOT;
-    }
-*/
-
-    /*
-    new_ip_len = htons(new_ip_len);
-    curr_ip_len = htons(curr_ip_len);
-    rv = bpf_l3_csum_replace(ctx, NHOFFSET + IP_CSUM_OFF, curr_ip_len, new_ip_len, 2);
-    rv = bpf_skb_store_bytes(ctx, NHOFFSET + IP_LEN_OFF, &new_ip_len, sizeof(new_ip_len), 0);
-    */
-
     u16 old_ttl_proto = load_half(ctx, NHOFFSET + IP_TTL_OFF);
     u16 new_ttl_proto = htons(((u16)newttl) << 8 | IPPROTO_UDP);
 
@@ -970,7 +883,7 @@ int egress_v6_tcp(struct __sk_buff *ctx) {
     newtcp.th_off = 0x50;
     newtcp.th_flags = TH_ACK;
 
-    // get current header values 
+    // get current header value
     u16 curr_ip_len = load_half(ctx, NHOFFSET + IP6_LEN_OFF);
     u16 new_ip_len = sizeof(struct _tcphdr);
 
@@ -1074,9 +987,26 @@ int egress_v6_udp(struct __sk_buff *ctx) {
     u16 sequence = 0;
     u8 newttl = 0;
     _in6_addr_t destaddr;
+    
+    u32 csum = 0;
 #pragma unroll
     for (int i = 0; i < 4; i++) {
-        destaddr._u._addr32[i] = load_word(ctx, NHOFFSET + IP6_DST_OFF + i*4);
+        u32 tmp = load_word(ctx, NHOFFSET + IP6_DST_OFF + i*4);
+        destaddr._u._addr32[i] = tmp;
+        tmp = ntohl(tmp);
+        csum += (tmp & 0xffff);
+        csum += (tmp >> 16);
+    }
+
+#if DEBUG
+    bpf_trace_printk("EGRESS udp6 csum after dstaddr 0x%x\n", csum);
+#endif
+
+#pragma unroll
+    for (int i = 0; i < 4; i++) {
+        u32 tmp = ntohl(load_word(ctx, NHOFFSET + IP6_SRC_OFF + i*4));
+        csum += (tmp & 0xffff);
+        csum += (tmp >> 16);
     }
     _decide_seq_ttl(pd, &sequence, &newttl);
     u16 sport = load_half(ctx, offset + UDP_SRC_OFF);
@@ -1085,6 +1015,14 @@ int egress_v6_udp(struct __sk_buff *ctx) {
     
 #if DEBUG
     bpf_trace_printk("EGRESS udp6 outgoing seq %lu origseq 0x%x\n", sequence, origseq);
+    bpf_trace_printk("EGRESS udp6 csum after addresses 0x%x\n", csum);
+#endif
+
+    csum += (u16)htons(20);
+    csum += (u16)htons(IPPROTO_UDP);
+
+#if DEBUG
+    bpf_trace_printk("EGRESS udp6 csum after pseudoheader 0x%x\n", csum);
 #endif
 
     // clone and redirect the original pkt out the intended interface
@@ -1100,6 +1038,73 @@ int egress_v6_udp(struct __sk_buff *ctx) {
 #ifdef DEBUG
     bpf_trace_printk("EGRESS udp6 after clone emit %lu\n", sequence);
 #endif
+
+    csum += htons(sport);
+    csum += htons(dport);
+    csum += htons(20);
+#if DEBUG
+    bpf_trace_printk("EGRESS udp6 csum after udp header 0x%x\n", csum);
+#endif
+
+    csum += htons(sequence);
+    csum = (csum >> 16) + (csum & 0xffff);
+    csum += (csum >> 16);
+    csum = (u16)(~csum & 0xffff);
+
+    u16 payload[6] = {(u16)csum,0,0,0,0,0};
+    
+    struct _udphdr newudp = {
+        .uh_sport = htons(sport),
+        .uh_dport = htons(dport),
+        .uh_ulen = htons(20),
+        .uh_sum = htons(sequence),
+    };
+
+#if DEBUG
+    bpf_trace_printk("EGRESS udp6 csum 0x%x\n", csum);
+#endif
+
+    // get current header value
+    u16 curr_ip_len = load_half(ctx, NHOFFSET + IP6_LEN_OFF);
+    u16 new_ip_len = sizeof(struct _udphdr) + 12;
+
+#if DEBUG
+    bpf_trace_printk("EGRESS udp6 truncating pkt from %d to %d\n", curr_ip_len, new_ip_len);
+#endif
+
+    // truncate packet
+    rv = bpf_skb_change_tail(ctx, NHOFFSET + sizeof(struct _ip6hdr) + new_ip_len, 0);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS udp6 bpf trunc packet failed\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+
+    rv = bpf_skb_store_bytes(ctx, NHOFFSET + sizeof(struct _ip6hdr), &newudp, sizeof(newudp), 0);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS udp6 bpf store new udp hdr failed\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+
+    rv = bpf_skb_store_bytes(ctx, NHOFFSET + sizeof(struct _ip6hdr) + sizeof(struct _udphdr), payload, sizeof(u16)*6, 0);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS udp6 bpf store payload failed\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+
+    new_ip_len = htons(new_ip_len);
+    rv = bpf_skb_store_bytes(ctx, NHOFFSET + IP6_LEN_OFF, &new_ip_len, sizeof(new_ip_len), 0);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS udp6 failed to store ip6 payload len\n");
+#endif
+        return TC_ACT_SHOT;
+    }
 
     rv = bpf_skb_store_bytes(ctx, NHOFFSET + IP6_TTL_OFF, &newttl, sizeof(newttl), 0);
     if (rv < 0) {
