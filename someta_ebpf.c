@@ -1469,6 +1469,7 @@ int ingress_v6(struct xdp_md *ctx) {
 #if DEBUG
     bpf_trace_printk("INGRESS icmp6 ttl exc from idx 0x%lx rttl %d\n", *val, recvttl);
 #endif
+    offset += sizeof(struct _ip6hdr);
 
     // sequence offset if relative to end of IP header
     int sequence_offset = 0;
