@@ -139,6 +139,7 @@ struct _icmphdr {
 
 struct probe_dest {
     u32         hop_bitmap;
+    u32         hop_mask;
     u16         sequence;
     u16         next_hop_to_probe;
     u16         maxttl;
@@ -1371,7 +1372,7 @@ int ingress_v4(struct xdp_md *ctx) {
     uint32_t srcip = iph->saddr;
     uint8_t recvttl = iph->ttl;
     if (data + offset + sizeof(struct _iphdr) > data_end) {
-        return XDP_PASS;
+        return INGRESS_ACTION;
     }
 #ifdef DEBUG
     bpf_trace_printk("INGRESS icmp time exceeded from dest of interest\n");
@@ -1381,7 +1382,7 @@ int ingress_v4(struct xdp_md *ctx) {
     _in6_addr_t origdst = {{{ iph->daddr, 0, 0, 0 }}};
     val = NULL;
     if ((val = trie.lookup(&origdst)) == NULL) {
-        return XDP_PASS;
+        return INGRESS_ACTION;
     }
     offset = offset + sizeof(struct _iphdr);
     u16 inipid = iph->id;
@@ -1400,7 +1401,7 @@ int ingress_v4(struct xdp_md *ctx) {
         sequence_offset = UDP_CSUM_OFF;
     }
     if (data + offset + 8 > data_end) {
-        return XDP_DROP;
+        return INGRESS_ACTION;
     }
     u16 seq = *(u16*)(data + offset + sequence_offset);
     seq = ntohs(seq);
@@ -1420,7 +1421,7 @@ int ingress_v4(struct xdp_md *ctx) {
 #if DEBUG
         bpf_trace_printk("INGRESS failed to get results idx\n");
 #endif
-        return XDP_DROP;
+        return INGRESS_ACTION;
     }
 #if DEBUG
     bpf_trace_printk("INGRESS got results index %llu\n", *resultsidx);
@@ -1429,7 +1430,7 @@ int ingress_v4(struct xdp_md *ctx) {
     new_results = new_results % MAXRESULTS;
     struct latency_sample *latsamp = results.lookup(&new_results);
     if (latsamp == NULL) {
-        return XDP_DROP;
+        return INGRESS_ACTION;
     }
 #if DEBUG
     bpf_trace_printk("INGRESS got lat sample ptr\n");
@@ -1451,7 +1452,7 @@ int ingress_v4(struct xdp_md *ctx) {
     u64 sentkey = (u64)*val << 32 | (u64)seq;
     struct sent_info *si = sentinfo.lookup(&sentkey);
     if (si == NULL) {
-        return XDP_DROP;
+        return INGRESS_ACTION;
     }
 #if DEBUG
     bpf_trace_printk("INGRESS got sentinfo sample ptr\n");
@@ -1477,8 +1478,7 @@ int ingress_v4(struct xdp_md *ctx) {
 #if DEBUG
     bpf_trace_printk("INGRESS recorded new latency sample idx %d\n", new_results);
 #endif
-
-    return XDP_DROP;
+    return INGRESS_ACTION;
 }
 
 int ingress_v6(struct xdp_md *ctx) {
@@ -1513,11 +1513,11 @@ int ingress_v6(struct xdp_md *ctx) {
 #endif
     offset = offset + sizeof(struct _ip6hdr);
     if (data + offset + sizeof(struct _icmphdr) > data_end) {
-        return XDP_PASS;
+        return INGRESS_ACTION;
     }
     struct _icmphdr *icmp = (struct _icmphdr*)(data + offset);
     if (icmp->icmp_type != ICMP6_TIME_EXCEEDED) {
-        return XDP_PASS;
+        return INGRESS_ACTION;
     }
 
 #ifdef DEBUG
@@ -1537,7 +1537,7 @@ int ingress_v6(struct xdp_md *ctx) {
 
     uint8_t recvttl = iph->hop_limit;
     if (data + offset + sizeof(struct _ip6hdr) > data_end) {
-        return XDP_PASS;
+        return INGRESS_ACTION;
     }
 #ifdef DEBUG
     bpf_trace_printk("INGRESS icmp6 time exceeded from dest of interest, len %d\n", outerlen);
@@ -1548,7 +1548,7 @@ int ingress_v6(struct xdp_md *ctx) {
     u16 inipid = iph->ip6_un1_flow >> 16;
     val = NULL;
     if ((val = trie.lookup(&origdst)) == NULL) {
-        return XDP_PASS;
+        return INGRESS_ACTION;
     }
 
 #if DEBUG
@@ -1569,7 +1569,7 @@ int ingress_v6(struct xdp_md *ctx) {
 #if DEBUG
         bpf_trace_printk("INGRESS icmp6 not enough data to get sequence\n");
 #endif
-        return XDP_DROP;
+        return INGRESS_ACTION;
     }
 #if DEBUG
         bpf_trace_printk("INGRESS icmp6 past length check\n");
@@ -1593,7 +1593,7 @@ int ingress_v6(struct xdp_md *ctx) {
 #if DEBUG
         bpf_trace_printk("INGRESS icmp6 failed to get results idx\n");
 #endif
-        return XDP_DROP;
+        return INGRESS_ACTION;
     }
 #if DEBUG
     bpf_trace_printk("INGRESS icmp6 got results index %llu\n", *resultsidx);
@@ -1602,7 +1602,7 @@ int ingress_v6(struct xdp_md *ctx) {
     new_results = new_results % MAXRESULTS;
     struct latency_sample *latsamp = results.lookup(&new_results);
     if (latsamp == NULL) {
-        return XDP_DROP;
+        return INGRESS_ACTION;
     }
 #if DEBUG
     bpf_trace_printk("INGRESS icmp6 got lat sample ptr\n");
@@ -1624,7 +1624,7 @@ int ingress_v6(struct xdp_md *ctx) {
     u64 sentkey = (u64)*val << 32 | (u64)seq;
     struct sent_info *si = sentinfo.lookup(&sentkey);
     if (si == NULL) {
-        return XDP_DROP;
+        return INGRESS_ACTION;
     }
 #if DEBUG
     bpf_trace_printk("INGRESS icmp6 got sentinfo sample ptr\n");
@@ -1651,6 +1651,6 @@ int ingress_v6(struct xdp_md *ctx) {
     bpf_trace_printk("INGRESS icmp6 recorded new latency sample idx %d\n", new_results);
 #endif
 
-    return XDP_DROP;
+    return INGRESS_ACTION;
 }
 

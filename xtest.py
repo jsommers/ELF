@@ -103,6 +103,11 @@ def main(args):
     elif args.encapsulation == 'ethernet':
         cflags.append('-DNHOFFSET=14')
 
+    if args.ingress == 'pass':
+        cflags.append('-DINGRESS_ACTION=XDP_PASS')
+    elif args.ingress == 'drop':
+        cflags.append('-DINGRESS_ACTION=XDP_DROP')
+
     bcc_debugflag = 0     
     if args.debug:
         cflags.append('-DDEBUG=1')
@@ -110,13 +115,6 @@ def main(args):
         bcc_debugflag = bcc.DEBUG_SOURCE
 
     b = BPF(src_file='someta_ebpf.c', debug=bcc_debugflag, cflags=cflags)
-
-    #b = BPF(src_file="someta_ebpf.c", cflags=['-DTUNNEL=6', '-DNHOFFSET=20', '-DDEBUG'])
-    #DEVICE='he-ipv6'
-    #b = BPF(src_file="someta_ebpf.c", cflags=['-DDEBUG', '-DNHOFFSET=14'])
-    #DEVICE='eno2'
-    #DEVICE='wlp4s0'
-
     destinfo = b['destinfo']
     metadata['timestamp'] = time.asctime()
     metadata['interface'] = args.interface
@@ -244,11 +242,14 @@ def main(args):
         pass
     ipdb.release()
 
+def sanitychecks(args):
+    if args.probeint < 0 or args.probeint > 1000:
+        print("Invalid probe interval (0-1000 is allowed)")
+        sys.exit()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('-x', '--on', default=60, type=int, help='Amount of time (seconds) to be "on" for probing non-responsive hops')
-    parser.add_argument('-y', '--off', default=1, type=int, help='Amount of time (seconds) to be "off" for probing non-responsive hops')
+    parser.add_argument('-I', '--ingress', choices=('pass','drop'), default='drop', help='Specify how ingress ICMP time exceeded messages should be handled: pass through to OS or drop in XDP')
     parser.add_argument('-l', '--logfile', default=False, action='store_true', help='Turn on logfile output')
     parser.add_argument('-f', '--filebase', default='ebpf_probe', help='Configure base name for log and data output files')
     parser.add_argument('-d', '--debug', default=False, action='store_true', help='Turn on debug logging')
@@ -257,4 +258,5 @@ if __name__ == '__main__':
     parser.add_argument('-e', '--encapsulation', choices=('ethernet', 'ipinip', 'ip6inip'), default='ethernet', help='How packets are encapsulated on the wire')
     parser.add_argument('addresses', metavar='addresses', nargs='*', type=str, help='IP addresses of interest')
     args = parser.parse_args()
+    sanitychecks(args)
     main(args)
