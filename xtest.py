@@ -88,6 +88,7 @@ class RunState(object):
         '''
         if self._args.logfile:
             logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)s %(message)s', filename=self._args.filebase + '.log', filemode='w')
+            logging.getLogger().addHandler(logging.StreamHandler())
         else:
             logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)s %(message)s')
 
