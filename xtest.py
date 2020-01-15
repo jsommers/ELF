@@ -16,7 +16,7 @@ import pyroute2
 
 # constants that mirror bpf C
 RESULTS_IDX = 256
-MAX_RESULTS = 8192
+MAX_RESULTS = 16384
 
 class _u(ctypes.Union):
     _fields_ = [
@@ -139,11 +139,11 @@ class RunState(object):
         elif self._args.ingress == 'drop':
             cflags.append('-DINGRESS_ACTION=XDP_DROP')
 
-        self._bcc_debugflag = 0     
+        self._bcc_debugflag = bcc.DEBUG_SOURCE
         if self._args.debug:
             cflags.append('-DDEBUG=1')
             # bcc_debugflag = bcc.DEBUG_BPF_REGISTER_STATE | bcc.DEBUG_SOURCE | bcc.DEBUG_BPF | bcc.DEBUG_LLVM_IR
-            self._bcc_debugflag = bcc.DEBUG_SOURCE
+            self._bcc_debugflag |= bcc.DEBUG_SOURCE
 
         self._cflags = cflags
 

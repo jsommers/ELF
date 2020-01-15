@@ -110,7 +110,7 @@ struct _icmphdr {
 #endif
 
 #define MAXDEST     128
-#define MAXRESULTS  8192
+#define MAXRESULTS  16384
 #define RESULTS_IDX 256
 
 #define IP_TTL_OFF offsetof(struct _iphdr, ttl)
