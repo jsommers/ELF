@@ -602,7 +602,6 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     
 #if DEBUG
     bpf_trace_printk("EGRESS udp4 outgoing seq %lu origseq 0x%x\n", sequence, origseq);
-    bpf_trace_printk("EGRESS udp4 pseudoheader csum 0x%x\n", csum);
 #endif
 
     // clone and redirect the original pkt out the intended interface
@@ -622,9 +621,6 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     csum += htons(sport);
     csum += htons(dport);
     csum += htons(20);
-#if DEBUG
-    bpf_trace_printk("EGRESS udp4 csum after udp header 0x%x\n", csum);
-#endif
     csum += htons(sequence);
     csum = (csum >> 16) + (csum & 0xffff);
     csum += (csum >> 16);
@@ -638,10 +634,6 @@ int egress_v4_udp(struct __sk_buff *ctx) {
         .uh_ulen = htons(20),
         .uh_sum = htons(sequence),
     };
-
-#if DEBUG
-    bpf_trace_printk("EGRESS udp4 csum 0x%x\n", csum);
-#endif
 
     // get current header value
     u16 curr_ip_len = load_half(ctx, NHOFFSET + IP_LEN_OFF);
@@ -1084,10 +1076,6 @@ int egress_v6_udp(struct __sk_buff *ctx) {
         csum += (tmp >> 16);
     }
 
-#if DEBUG
-    bpf_trace_printk("EGRESS udp6 csum after dstaddr 0x%x\n", csum);
-#endif
-
 #pragma unroll
     for (int i = 0; i < 4; i++) {
         u32 tmp = ntohl(load_word(ctx, NHOFFSET + IP6_SRC_OFF + i*4));
@@ -1101,15 +1089,10 @@ int egress_v6_udp(struct __sk_buff *ctx) {
     
 #if DEBUG
     bpf_trace_printk("EGRESS udp6 outgoing seq %lu origseq 0x%x\n", sequence, origseq);
-    bpf_trace_printk("EGRESS udp6 csum after addresses 0x%x\n", csum);
 #endif
 
     csum += (u16)htons(20);
     csum += (u16)htons(IPPROTO_UDP);
-
-#if DEBUG
-    bpf_trace_printk("EGRESS udp6 csum after pseudoheader 0x%x\n", csum);
-#endif
 
     // clone and redirect the original pkt out the intended interface
     int rv = bpf_clone_redirect(ctx, IFINDEX, 0);
@@ -1128,10 +1111,6 @@ int egress_v6_udp(struct __sk_buff *ctx) {
     csum += htons(sport);
     csum += htons(dport);
     csum += htons(20);
-#if DEBUG
-    bpf_trace_printk("EGRESS udp6 csum after udp header 0x%x\n", csum);
-#endif
-
     csum += htons(sequence);
     csum = (csum >> 16) + (csum & 0xffff);
     csum += (csum >> 16);
@@ -1145,10 +1124,6 @@ int egress_v6_udp(struct __sk_buff *ctx) {
         .uh_ulen = htons(20),
         .uh_sum = htons(sequence),
     };
-
-#if DEBUG
-    bpf_trace_printk("EGRESS udp6 csum 0x%x\n", csum);
-#endif
 
     // get current header value
     u16 curr_ip_len = load_half(ctx, NHOFFSET + IP6_LEN_OFF);

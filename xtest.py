@@ -199,7 +199,7 @@ class RunState(object):
                 metadata['hosts'][addr] = name
                 new_address_of_interest(b['trie'], addr, destinfo)
 
-def _write_results(b, rcount, metadata, dump_all=False):
+def _write_results(b, rcount, metadata, config, dumpall=False):
     resultval = -1
     for k,v in b['counters'].items():
         if k.value == RESULTS_IDX:
@@ -214,7 +214,7 @@ def _write_results(b, rcount, metadata, dump_all=False):
             metadata['results'].append(d)
             rcount += 1
 
-    if dump_all:
+    if dumpall:
         for k,v in b['sentinfo'].items():
             idx = k.value >> 32 & 0xffffffff
             seq = k.value & 0xffffffff
@@ -227,26 +227,23 @@ def _write_results(b, rcount, metadata, dump_all=False):
 
 def _print_debug_info(b):
     print('counters')
-    rc = resultcount
     for k,v in b['counters'].items():
-            print("\t",k,v)
-            if k.value == RESULTS_IDX:
-                rc = v.value
+        print("\t",k,v)
 
     print('trie')
     for k,v in b['trie'].items():
-            ver = 6
-            if k._u._addr32[3] == 0:
-                ver = 4
-            if ver == 6:
-                print("\taddr6 0x", end='', sep='')
-                for i in range(16):
-                    print("{:02x}".format(k._u._addr8[i]), end='', sep='')
-            else:
-                print("\taddr4 0x", end='', sep='')
-                for i in range(4):
-                    print("{:02x}".format(k._u._addr8[i]), end='', sep='')
-            print(v)
+        ver = 6
+        if k._u._addr32[3] == 0:
+            ver = 4
+        if ver == 6:
+            print("\taddr6 0x", end='', sep='')
+            for i in range(16):
+                print("{:02x}".format(k._u._addr8[i]), end='', sep='')
+        else:
+            print("\taddr4 0x", end='', sep='')
+            for i in range(4):
+                print("{:02x}".format(k._u._addr8[i]), end='', sep='')
+        print(v)
 
     logging.debug("kernel debug messages: ")
     while True:
