@@ -1320,7 +1320,7 @@ int ingress_v4(struct xdp_md *ctx) {
     // compute hdr size + shift ahead
     offset = offset + ((iph->verihl&0x0f) << 2);
 #ifdef DEBUG
-    bpf_trace_printk("INGRESS ICMP4 from 0x%lx hsize %d\n", ntohl(iph->saddr), ((iph->verihl&0x0f) << 2));
+    bpf_trace_printk("INGRESS ip4 from 0x%lx hsize %d\n", ntohl(iph->saddr), ((iph->verihl&0x0f) << 2));
 #endif
     if (data + offset + sizeof(struct _icmphdr) > data_end) {
         return XDP_PASS;
@@ -1331,7 +1331,7 @@ int ingress_v4(struct xdp_md *ctx) {
     }
 
 #ifdef DEBUG
-    bpf_trace_printk("INGRESS icmp time exceeded from 0x%lx\n", ntohl(iph->saddr));
+    bpf_trace_printk("INGRESS ip4 icmp time exceeded from 0x%lx\n", ntohl(iph->saddr));
 #endif
 
     // FIXME: not doing this yet, but can use this len to determine
@@ -1350,7 +1350,7 @@ int ingress_v4(struct xdp_md *ctx) {
         return INGRESS_ACTION;
     }
 #ifdef DEBUG
-    bpf_trace_printk("INGRESS icmp time exceeded from dest of interest\n");
+    bpf_trace_printk("INGRESS ip4 icmp time exceeded from dest of interest\n");
 #endif
     // the *inner* v4 header returned by some router where the packet died
     iph = (struct _iphdr*)(data + offset);
@@ -1363,7 +1363,7 @@ int ingress_v4(struct xdp_md *ctx) {
     u16 inipid = iph->id;
 
 #if DEBUG
-    bpf_trace_printk("INGRESS ttl exc from 0x%x rttl %d idx %d\n", srcip, recvttl, *val);
+    bpf_trace_printk("INGRESS ip4 ttl exc from 0x%x rttl %d idx %d\n", srcip, recvttl, *val);
 #endif
 
     // sequence offset if relative to end of IP header
@@ -1385,7 +1385,7 @@ int ingress_v4(struct xdp_md *ctx) {
     u16 dport = *(u16*)(data + offset + 2);
     dport = ntohs(dport);
 #if DEBUG
-    bpf_trace_printk("INGRESS seq %d proto %d from %d received\n", seq, iph->protocol, *val);
+    bpf_trace_printk("INGRESS ip4 seq %d proto %d from %d received\n", seq, iph->protocol, *val);
 #endif
 
     // record received probe
@@ -1394,12 +1394,12 @@ int ingress_v4(struct xdp_md *ctx) {
     u64 *resultsidx = counters.lookup_or_init(&reskey, &zero);
     if (resultsidx == NULL) {
 #if DEBUG
-        bpf_trace_printk("INGRESS failed to get results idx\n");
+        bpf_trace_printk("INGRESS ip4 failed to get results idx\n");
 #endif
         return INGRESS_ACTION;
     }
 #if DEBUG
-    bpf_trace_printk("INGRESS got results index %llu\n", *resultsidx);
+    bpf_trace_printk("INGRESS ip4 got results index %llu\n", *resultsidx);
 #endif
     int new_results = (int)*resultsidx;
     new_results = new_results % MAXRESULTS;
@@ -1408,8 +1408,10 @@ int ingress_v4(struct xdp_md *ctx) {
         return INGRESS_ACTION;
     }
 #if DEBUG
-    bpf_trace_printk("INGRESS got lat sample ptr\n");
+    bpf_trace_printk("INGRESS ip4 rdata got lat sample ptr proto %d seq %d rttl %d\n", iph->protocol, seq, recvttl);
+    bpf_trace_printk("INGRESS ip4 rdata sport %d dport %d inipid %x\n", sport, dport, inipid);
 #endif
+    counters.increment(RESULTS_IDX);
     latsamp->sequence = seq;
     latsamp->recv = bpf_ktime_get_ns();
     latsamp->recvttl = recvttl;
@@ -1422,7 +1424,6 @@ int ingress_v4(struct xdp_md *ctx) {
         latsamp->responder._u._addr32[i] = htonl(source._u._addr32[i]);
         latsamp->target._u._addr32[i] = htonl(origdst._u._addr32[i]);
     }
-    counters.increment(RESULTS_IDX);
 
     u64 sentkey = (u64)*val << 32 | (u64)seq;
     struct sent_info *si = sentinfo.lookup(&sentkey);
@@ -1430,7 +1431,9 @@ int ingress_v4(struct xdp_md *ctx) {
         return INGRESS_ACTION;
     }
 #if DEBUG
-    bpf_trace_printk("INGRESS got sentinfo sample ptr\n");
+    bpf_trace_printk("INGRESS ip4 got sentinfo sample ptr\n");
+    bpf_trace_printk("INGRESS ip4 rdata recv %llu send %llu\n", latsamp->recv, si->send_time);
+    bpf_trace_printk("INGRESS ip4 rdata outttl %d origseq %d outipid %x\n", si->outttl, si->origseq, si->outipid);
 #endif
 
     // update bitmap to show hop as responsive
@@ -1451,7 +1454,7 @@ int ingress_v4(struct xdp_md *ctx) {
 
     sentinfo.delete(&sentkey);      
 #if DEBUG
-    bpf_trace_printk("INGRESS recorded new latency sample idx %d\n", new_results);
+    bpf_trace_printk("INGRESS ip4 recorded new latency sample idx %d\n", new_results);
 #endif
     return INGRESS_ACTION;
 }
@@ -1483,7 +1486,7 @@ int ingress_v6(struct xdp_md *ctx) {
     }
 
 #ifdef DEBUG
-    bpf_trace_printk("INGRESS icmp6 from %lx:%lx:", ntohl(source._u._addr32[0]), ntohl(source._u._addr32[1]));
+    bpf_trace_printk("INGRESS ip6 from %lx:%lx:", ntohl(source._u._addr32[0]), ntohl(source._u._addr32[1]));
     bpf_trace_printk("%lx:%lx\n", ntohl(source._u._addr32[2]), ntohl(source._u._addr32[3]));
 #endif
     offset = offset + sizeof(struct _ip6hdr);
@@ -1496,7 +1499,7 @@ int ingress_v6(struct xdp_md *ctx) {
     }
 
 #ifdef DEBUG
-    bpf_trace_printk("INGRESS icmp6 time exceeded\n");
+    bpf_trace_printk("INGRESS ip6 time exceeded\n");
 #endif
 
     // FIXME: not doing this yet, but can use this len to determine
@@ -1515,7 +1518,7 @@ int ingress_v6(struct xdp_md *ctx) {
         return INGRESS_ACTION;
     }
 #ifdef DEBUG
-    bpf_trace_printk("INGRESS icmp6 time exceeded from dest of interest, len %d\n", outerlen);
+    bpf_trace_printk("INGRESS ip6 time exceeded from dest of interest, len %d\n", outerlen);
 #endif
     // the *inner* v6 header returned by some router where the packet died
     iph = (struct _ip6hdr*)(data + offset);
@@ -1527,7 +1530,7 @@ int ingress_v6(struct xdp_md *ctx) {
     }
 
 #if DEBUG
-    bpf_trace_printk("INGRESS icmp6 ttl exc from idx 0x%lx rttl %d\n", *val, recvttl);
+    bpf_trace_printk("INGRESS ip6 ttl exc from idx 0x%lx rttl %d\n", *val, recvttl);
 #endif
     offset += sizeof(struct _ip6hdr);
 
@@ -1542,12 +1545,12 @@ int ingress_v6(struct xdp_md *ctx) {
     }
     if (data + offset + 8 > data_end) {
 #if DEBUG
-        bpf_trace_printk("INGRESS icmp6 not enough data to get sequence\n");
+        bpf_trace_printk("INGRESS ip6 not enough data to get sequence\n");
 #endif
         return INGRESS_ACTION;
     }
 #if DEBUG
-        bpf_trace_printk("INGRESS icmp6 past length check\n");
+        bpf_trace_printk("INGRESS ip6 past length check\n");
 #endif
 
     u16 seq = *(u16*)(data + offset + sequence_offset);
@@ -1557,7 +1560,7 @@ int ingress_v6(struct xdp_md *ctx) {
     u16 dport = *(u16*)(data + offset + 2);
     dport = ntohs(dport);
 #if DEBUG
-    bpf_trace_printk("INGRESS icmp6 seq %d proto %d from %d received\n", seq, iph->protocol, *val);
+    bpf_trace_printk("INGRESS ip6 seq %d proto %d from %d received\n", seq, iph->protocol, *val);
 #endif
 
     // record received probe
@@ -1566,21 +1569,22 @@ int ingress_v6(struct xdp_md *ctx) {
     u64 *resultsidx = counters.lookup_or_init(&reskey, &zero);
     if (resultsidx == NULL) {
 #if DEBUG
-        bpf_trace_printk("INGRESS icmp6 failed to get results idx\n");
+        bpf_trace_printk("INGRESS ip6 failed to get results idx\n");
 #endif
         return INGRESS_ACTION;
     }
-#if DEBUG
-    bpf_trace_printk("INGRESS icmp6 got results index %llu\n", *resultsidx);
-#endif
     int new_results = (int)*resultsidx;
+#if DEBUG
+    bpf_trace_printk("INGRESS ip6 got results index %llu\n", new_results);
+#endif
     new_results = new_results % MAXRESULTS;
     struct latency_sample *latsamp = results.lookup(&new_results);
     if (latsamp == NULL) {
         return INGRESS_ACTION;
     }
 #if DEBUG
-    bpf_trace_printk("INGRESS icmp6 got lat sample ptr\n");
+    bpf_trace_printk("INGRESS ip6 rdata got lat sample ptr proto %d seq %d rttl %d\n", iph->protocol, seq, recvttl);
+    bpf_trace_printk("INGRESS ip6 rdata sport %d dport %d inipid %x\n", sport, dport, inipid);
 #endif
     latsamp->sequence = seq;
     latsamp->recv = bpf_ktime_get_ns();
@@ -1601,9 +1605,6 @@ int ingress_v6(struct xdp_md *ctx) {
     if (si == NULL) {
         return INGRESS_ACTION;
     }
-#if DEBUG
-    bpf_trace_printk("INGRESS icmp6 got sentinfo sample ptr\n");
-#endif
 
     // update bitmap to show hop as responsive
     int idx = *val;
@@ -1612,6 +1613,12 @@ int ingress_v6(struct xdp_md *ctx) {
         u32 newbit = 1 << (si->outttl-1); 
         pd->hop_bitmap = pd->hop_bitmap | newbit;
     }
+
+#if DEBUG
+    bpf_trace_printk("INGRESS ip6 got sentinfo sample ptr\n");
+    bpf_trace_printk("INGRESS ip6 rdata recv %llu send %llu\n", latsamp->recv, si->send_time);
+    bpf_trace_printk("INGRESS ip6 rdata outttl %d origseq %d outipid %x\n", si->outttl, si->origseq, si->outipid);
+#endif
 
     latsamp->send = si->send_time;
     latsamp->outttl = si->outttl;
@@ -1623,7 +1630,7 @@ int ingress_v6(struct xdp_md *ctx) {
 
     sentinfo.delete(&sentkey);      
 #if DEBUG
-    bpf_trace_printk("INGRESS icmp6 recorded new latency sample idx %d\n", new_results);
+    bpf_trace_printk("INGRESS ip6 recorded new latency sample idx %d\n", new_results);
 #endif
 
     return INGRESS_ACTION;
