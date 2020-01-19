@@ -1,249 +1,317 @@
-#!/usr/bin/python
-
-from __future__ import print_function
+#!/usr/bin/env python3
 
 import argparse
-import csv
+import json
+from contextlib import contextmanager
 import ctypes
+import ipaddress
 import logging
-import re
 import socket
-import struct
-import subprocess
 import sys
 import time
 
 import bcc
+from bcc import BPF
 import pyroute2
 
-class InvalidConfiguration(Exception):
-    pass
+# constants that mirror bpf C
+RESULTS_IDX = 256
+MAX_RESULTS = 16384
 
-class ProbeConfig(object):
+class _u(ctypes.Union):
+    _fields_ = [
+        ('_addr32', ctypes.c_uint32 * 4),
+        ('_addr16', ctypes.c_uint16 * 8),
+        ('_addr8', ctypes.c_uint8 * 16)
+    ]
+
+class in6_addr(ctypes.Structure):
+    '''
+    Mirror struct of in6_addr in bpf C
+    '''
+    _fields_ = [('_u', _u)]
+
+
+def to_ipaddr(obj):
+    '''
+    bytes -> ipaddr
+    Convert raw bytes into an ipaddress object.
+    '''
+    if obj._u._addr32[3] == 0:
+        # ip4
+        return ipaddress.IPv4Address(obj._u._addr32[0])
+    else:
+        i = obj._u._addr32[0]
+        for j in range(1, 4):
+            i = i << 32 | obj._u._addr32[j]
+        return ipaddress.IPv6Address(i)
+
+def new_address_of_interest(table, a, dinfo):
+    '''
+    (bpftable, ipaddr, bpftable) -> None
+    Add a new address of interest to bpf tables
+    (and initialize table structures)
+    '''
+    xaddr = in6_addr()
+    ip = ipaddress.ip_address(a)
+    pstr = ip.packed
+    idx = len(table) + 1
+    for i in range(len(pstr)):
+        xaddr._u._addr8[i] = pstr[i]
+        dinfo[idx].dest._u._addr8[i] = pstr[i]
+    if ip.version == 4:
+        for i in range(4, 16):
+            xaddr._u._addr8[i] = 0
+            dinfo[idx].dest._u._addr8[i] = 0
+    table[xaddr] = ctypes.c_uint64(idx)
+    dinfo[idx].hop_bitmap = 0
+    dinfo[idx].max_ttl = 16
+
+def _set_bpf_jumptable(bpf, tablename, idx, fnname, progtype):
+    '''
+    (bccobj, str, int, str, int) -> None
+    Set up one entry in a bpf jump table to enable chaining
+    bpf function calls.
+    '''
+    tail_fn = bpf.load_func(fnname, progtype)
+    prog_array = bpf.get_table(tablename)
+    prog_array[ctypes.c_int(idx)] = ctypes.c_int(tail_fn.fd)
+
+
+class RunState(object):
     def __init__(self, args):
-        self.bunch = args.bunch
-        self.debug = args.debug
-        self.interval = args.spacing
-        self.device = args.device
-        self.maxttl = args.maxttl
-        self.hostnames = args.hostnames
-        self.status = 1.0
-        self.ether = args.noether
-        self.outfile = args.outfile
-        self.timeout = int(args.timeout)
-        self._sanitycheck()
+        self._args = args
+    
+    def setup(self):
+        '''
+        Do some basic setup for logging, bpf, etc.
+        '''
+        if self._args.logfile:
+            logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)s %(message)s', filename=self._args.filebase + '.log', filemode='w')
+            logging.getLogger().addHandler(logging.StreamHandler())
+        else:
+            logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)s %(message)s')
 
-    def _sanitycheck(self):
-        if self.interval < 10:
-            raise InvalidConfiguation("fail: interval is less than 10 microsec")
-        if self.device is None:
-            raise InvalidConfiguation("Need a device")
-        if not self.hostnames:
-            raise InvalidConfiguration("No hosts specified for tracing")
-        if self.maxttl < 1 or self.maxttl > 64:
-            raise InvalidConfiguration("Invalid maxttl setting")
+    def _open_pyroute2(self):
+        '''
+        open pyroute2 for eventual installation of CLS_SCHED ebpf code
+        '''
+        ip = pyroute2.IPRoute()
+        ipdb = pyroute2.IPDB(nl=ip)
+        try:
+            idx = ipdb.interfaces[self._args.interface].index
+        except KeyError:
+            logging.error("Invalid device {}".format(self._args.interface))
+            sys.exit(-1)
+        logging.info("ifindex for {} is {}".format(self._args.interface, idx))
+        self._idx = idx
+        self._ip = ip
+        self._ipdb = ipdb
 
-    def cflags(self):
-        return ["-DDEBUG={}".format(int(self.debug)), "-DPROBE_INTERVAL={}".format(self.interval), "-DBUNCH={}".format(int(self.bunch)), "-DETHER_ENCAP={}".format(int(self.ether))]
+        try:
+            ip.tc('del', 'clsact', idx)
+        except pyroute2.netlink.exceptions.NetlinkError:
+            pass
 
+    @property
+    def idx(self):
+        return self._idx
 
-def lookup_host(host, alllist):
-    try:
-        hname, _, iplist = socket.gethostbyname_ex(host)
-    except socket.gaierror:
-        logging.error("Error looking up hostname {}".format(host))
-        sys.exit(-1)
-    for ipstr in iplist:
-        packed_ip = socket.inet_aton(ipstr)
-        alllist.append((ipstr, struct.unpack("!I", packed_ip)[0]))
+    def _build_bpf_cflags(self):
+        '''
+        build CFLAGS for BCC based on command-line configuration.
+        NB: this must be done *after* open ipdb, since we get the 
+        interface index from pyroute2.
+        '''
+        cflags = ['-Wall', '-DMIN_PROBE={}'.format(1000000 * self._args.probeint)] # 1 millisec default
+        cflags.append('-DIFINDEX={}'.format(self._idx))
+        if self._args.encapsulation == 'ipinip':
+            cflags.append('-DTUNNEL=4')
+            cflags.append('-DNHOFFSET=20')
+        elif self._args.encapsulation == 'ip6inip':
+            cflags.append('-DTUNNEL=6')
+            cflags.append('-DNHOFFSET=20')
+        elif self._args.encapsulation == 'ethernet':
+            cflags.append('-DNHOFFSET=14')
 
-def _unpack_ip(i):
-    vals = []
-    for shift in (0, 8, 16, 24):
-        vals.append(str((i >> shift) & 0xff))
-    return '.'.join(vals)
+        if self._args.ingress == 'pass':
+            cflags.append('-DINGRESS_ACTION=XDP_PASS')
+        elif self._args.ingress == 'drop':
+            cflags.append('-DINGRESS_ACTION=XDP_DROP')
 
-def main(config):
-    ip = pyroute2.IPRoute()
-    ipdb = pyroute2.IPDB(nl=ip)
-    try:
-        idx = ipdb.interfaces[config.device].index
-    except KeyError:
-        logging.error("Invalid device {}".format(config.device))
-        sys.exit(-1)
+        self._bcc_debugflag = bcc.DEBUG_SOURCE
+        if self._args.debug:
+            cflags.append('-DDEBUG=1')
+            bcc_debugflag = bcc.DEBUG_BPF_REGISTER_STATE | bcc.DEBUG_SOURCE | bcc.DEBUG_BPF | bcc.DEBUG_LLVM_IR
+            self._bcc_debugflag |= bcc.DEBUG_SOURCE
 
-    logging.info("ifindex for {} is {}".format(config.device, idx))
+        self._cflags = cflags
 
-    iplist = []
-    for h in config.hostnames:
-        lookup_host(h, iplist)
-    logging.info("Tracing hosts: ", ','.join([str(i) for i in iplist]))
-    if config.maxttl > 0:
-        numhops = config.maxttl
+    @contextmanager
+    def open_ebpf(self, metadata):
+        '''
+        context manager that opens and configures BCC ebpf object, and closes/releases
+        ebpf + ipdb resources when done
+        '''
+        self._open_pyroute2()
+        self._build_bpf_cflags()
+        b = BPF(src_file='someta_ebpf.c', debug=self._bcc_debugflag, cflags=self._cflags)
 
-    debugflag = 0     
-    if config.debug:
-        debugflag = bcc.DEBUG_BPF_REGISTER_STATE | bcc.DEBUG_SOURCE | bcc.DEBUG_BPF | bcc.DEBUG_LLVM_IR
+        self._register_addresses_of_interest(b, metadata)
 
-    cflags=["-Wall", "-DIFINDEX={}".format(idx), "-DNUM_HOPS={}".format(numhops-1)]
-    cflags += config.cflags()
+        egress_fn = b.load_func('egress_path', BPF.SCHED_CLS)
+        ingress_fn = b.load_func("ingress_path", BPF.XDP)
+        b.attach_xdp(self._args.interface, ingress_fn, 0)
 
-    ibpf = bcc.BPF(src_file='someta_ebpf.c', debug=debugflag, cflags=cflags)
-
-    # FIXME: ugly as hell; generalize me
-    # setup ingress path
-    ingress_fn = ibpf.load_func("ingress_path", bcc.BPF.XDP)
-    iprog_array = ibpf.get_table("ingress_prog_array")
-    icmp_ingress = ibpf.load_func("ingress_path_icmp", bcc.BPF.XDP)
-    tcp_ingress = ibpf.load_func("ingress_path_tcp", bcc.BPF.XDP)
-    udp_ingress = ibpf.load_func("ingress_path_udp", bcc.BPF.XDP)
-    iprog_array[ctypes.c_int(1)] = ctypes.c_int(icmp_ingress.fd)
-    iprog_array[ctypes.c_int(6)] = ctypes.c_int(tcp_ingress.fd)
-    iprog_array[ctypes.c_int(17)] = ctypes.c_int(udp_ingress.fd)
-    ibpf.attach_xdp(config.device, ingress_fn)
-
-    # setup egress path
-    egress_fn = ibpf.load_func('egress_path', bcc.BPF.SCHED_CLS)
-    eprog_array = ibpf.get_table("egress_prog_array")
-    icmp_egress = ibpf.load_func("egress_path_icmp", bcc.BPF.SCHED_CLS)
-    tcp_egress = ibpf.load_func("egress_path_tcp", bcc.BPF.SCHED_CLS)
-    udp_egress = ibpf.load_func("egress_path_udp", bcc.BPF.SCHED_CLS)
-    eprog_array[ctypes.c_int(1)] = ctypes.c_int(icmp_egress.fd)
-    eprog_array[ctypes.c_int(6)] = ctypes.c_int(tcp_egress.fd)
-    eprog_array[ctypes.c_int(17)] = ctypes.c_int(udp_egress.fd)
-
-
-    try:
-        ip.tc('del', 'clsact', idx)
-    except pyroute2.netlink.exceptions.NetlinkError:
-        pass
-
-    ip.tc('add', 'clsact', idx)
-    ip.tc('add-filter', 'bpf', idx, ':1', fd=egress_fn.fd, name=egress_fn.name,
+        self._ip.tc('add', 'clsact', self._idx)
+        self._ip.tc('add-filter', 'bpf', self._idx, ':1', fd=egress_fn.fd, name=egress_fn.name,
             parent='ffff:fff3', classid=1, direct_action=True)
 
-    # register the ipaddress of interest
-    ibpf['ip_interest'].clear()
-    key = 0
-    for ipstr, taddr in iplist:
-        logging.info("Adding {} to ip interest hash".format(ipstr))
-        ibpf['ip_interest'][ctypes.c_ulong(socket.htonl(taddr))] = ctypes.c_ulonglong(key)
-        key += 1
+        # set up jump tables for v4/v6 processing on ingress + egress
+        for i,fnname in [(4,'ingress_v4'), (6, 'ingress_v6')]:
+            _set_bpf_jumptable(b, 'ingress_layer3', i, fnname, BPF.XDP)
 
-    logging.info("Installed ebpf code; ctrl+c to interrupt")
+        for i,fnname in [(4,'egress_v4'), (6, 'egress_v6')]:
+            _set_bpf_jumptable(b, 'egress_layer3', i, fnname, BPF.SCHED_CLS)
 
-    outfile = open(config.outfile + ".csv", 'wb')
-    csvwriter = csv.writer(outfile)
-    # csvwriter.writerow([bytes(x, encoding='utf-8') for x in ['seq','origseq','latency','send','recv','outttl','recvttl','sport','dport','target','responder']])
+        for i,fnname in [(socket.IPPROTO_ICMP, 'egress_v4_icmp'), (socket.IPPROTO_TCP, 'egress_v4_tcp'), (socket.IPPROTO_UDP, 'egress_v4_udp')]:
+            _set_bpf_jumptable(b, 'egress_v4_proto', i, fnname, BPF.SCHED_CLS)
 
-    def _print_status():
+        for i,fnname in [(socket.IPPROTO_ICMPV6, 'egress_v6_icmp'), (socket.IPPROTO_TCP, 'egress_v6_tcp'), (socket.IPPROTO_UDP, 'egress_v6_udp')]:
+            _set_bpf_jumptable(b, 'egress_v6_proto', i, fnname, BPF.SCHED_CLS)
+        
         try:
-            currprobeseq = ibpf['vars'][ctypes.c_ulong(0)].value
-        except KeyError:
-            currprobeseq = -1
-        logging.info("{:.3f}   probeseq {}".format(time.time() - start, currprobeseq))
+            yield b
+        finally:
+            b.remove_xdp(self._args.interface)
+            self._ip.tc('del', 'clsact', self._idx)
+            self._ipdb.release()
 
-    def _get_nextresult():
-        try:
-            nextresult = ibpf['vars'][ctypes.c_ulong(2)].value
-            return nextresult
-        except KeyError:
-            logging.warning("No vars idx 2 val for results???")
-            return -1
+    def _register_addresses_of_interest(self, b, metadata):
+        '''
+        (bpf, metadatadict) -> None
+        add IP addresses corresponding to all DNS names given on command line to
+        internal address hash.
+        '''
+        destinfo = b['destinfo']
+        for name in self._args.addresses:
+            for family,_,_,_,sockaddr in socket.getaddrinfo(name, None):
+                addr = sockaddr[0]
+                metadata['hosts'][addr] = name
+                new_address_of_interest(b['trie'], addr, destinfo)
 
-    start = time.time()
-    resultidx = 0
-    laststatus = 0
-    killit = False
+def _write_results(b, rcount, metadata, config, dumpall=False):
+    resultval = -1
+    for k,v in b['counters'].items():
+        if k.value == RESULTS_IDX:
+            rc = v.value
+    if resultval > -1:
+        while rcount < rc:
+            resultidx = rcount % MAX_RESULTS
+            res = b['results'][resultidx]
+            if config.debug:
+                print("latsamp", resultidx, res.sequence, res.origseq, res.recv-res.send, res.send, res.recv, res.sport, res.dport, res.outttl, res.recvttl, to_ipaddr(res.responder), to_ipaddr(res.target), res.protocol, res.outipid, res.inipid)
+            d = {'seq':res.sequence, 'origseq':res.origseq, 'latency':(res.recv-res.send), 'sendtime':res.send, 'recvtime':res.recv, 'dest':str(to_ipaddr(res.target)), 'responder':str(to_ipaddr(res.responder)), 'outttl':res.outttl, 'recvttl':res.recvttl, 'sport':res.sport, 'dport':res.dport, 'protocol':res.protocol, 'outipid':res.outipid, 'inipid':res.inipid}
+            metadata['results'].append(d)
+            rcount += 1
+
+    if dumpall:
+        for k,v in b['sentinfo'].items():
+            idx = k.value >> 32 & 0xffffffff
+            seq = k.value & 0xffffffff
+            if config.debug:
+                print("sent", idx, seq, v.origseq, v.send_time, to_ipaddr(v.dest), v.outttl, v.sport, v.dport, v.protocol, v.outipid)
+            d = {'seq':seq, 'origseq':v.origseq, 'sendtime':v.send_time, 'dest':str(to_ipaddr(v.dest)), 'outttl':v.outttl, 'sport':v.sport, 'dport':v.dport, 'recvtime':0, 'responder':'', 'recvttl':-1, 'latency':-1, 'protocol':v.protocol, 'outipid':v.outipid}
+            metadata['results'].append(d)
+
+    return rcount
+
+def _print_debug_info(b):
+    print('counters')
+    for k,v in b['counters'].items():
+        print("\t",k,v)
+
+    print('trie')
+    for k,v in b['trie'].items():
+        ver = 6
+        if k._u._addr32[3] == 0:
+            ver = 4
+        if ver == 6:
+            print("\taddr6 0x", end='', sep='')
+            for i in range(16):
+                print("{:02x}".format(k._u._addr8[i]), end='', sep='')
+        else:
+            print("\taddr4 0x", end='', sep='')
+            for i in range(4):
+                print("{:02x}".format(k._u._addr8[i]), end='', sep='')
+        print(v)
+
+    logging.debug("kernel debug messages: ")
     while True:
         try:
-            now = time.time()
-            if now - laststatus > config.status:
-                _print_status()
-                laststatus = now
-
-            print("debug table")
-            for k,v in ibpf['xdebug'].items():
-                print("{}: {}".format(k, v.value))
-
-            if config.timeout > 0 and now > start + config.timeout:
-                logging.info("external program timeout exceeded")
-                killit = True
+            task,pid,cpu,flags,ts,msg = b.trace_fields(nonblocking=True)
+            if task is None:
                 break
-
-            nextresult = _get_nextresult()
-            if nextresult != -1:
-                while resultidx != nextresult:
-                    result = ibpf['results'][resultidx]
-                    csvwriter.writerow([result.seq, result.origseq, result.recv-result.send, result.send, result.recv, result.outttl, result.recvttl, result.sport, result.dport, _unpack_ip(result.target), _unpack_ip(result.responder)])
-
-                    resultidx += 1
-                    if resultidx == len(ibpf['results']):
-                        resultidx = 0
-
-            time.sleep((config.status - (time.time() - now))/2)
-
-        except KeyboardInterrupt:
-            killit = True
-            logging.info("ctrl+c received; exiting")
+            logging.debug("ktime {} cpu{} {} flags:{} {}".format(ts, cpu, task.decode(errors='ignore'), flags.decode(errors='ignore'), msg.decode(errors='ignore')).replace('%',''))
+        except ValueError:   
             break
 
-    logging.info("Waiting 1s for any stray responses")
-    time.sleep(1.0)
-    logging.info("removing filters and shutting down")
 
-    # take care of left-over data from sending 
-    # (probes that got sent, but for which we didn't receive any response)
-    seqsend = {}
-    for k,v in ibpf['seqsend'].items():
-        seq = k.value & 0xffffffff
-        seqsend[seq] = v.value
-    
-    seqorig = {}
-    for k,v in ibpf['seqorigseq'].items():
-        seq = k.value & 0xffffffff
-        seqorig[seq] = v.value
+def main(config):
+    state = RunState(config)
+    state.setup()
 
-    for k,v in ibpf['seqttl'].items():
-        seq = k.value & 0xffffffff
-        dstip = _unpack_ip(socket.ntohl(k.value >> 32))
-        csvwriter.writerow([seq, seqorig.get(seq, 0), seqsend.get(seq, 0), seqsend.get(seq, 0), 0, v.value, 0, 0, 0, dstip, '0.0.0.0'])
+    metadata = {}
+    metadata['timestamp'] = time.asctime()
+    metadata['interface'] = config.interface
+    metadata['hosts'] = {}
 
-    ibpf.remove_xdp(config.device)
-    ip.tc('del', 'clsact', idx)
-    ipdb.release()
-    outfile.close()
-    logging.info("Done.")
+    with state.open_ebpf(metadata) as b:
+        metadata['interface_idx'] = state.idx
+        metadata['results'] = []
 
+        logging.info("start")
+        resultcount = 0
+        while True:
+            try:
+                time.sleep(1)
+                newrc = _write_results(b, resultcount, metadata, config)
+                if newrc > resultcount:
+                    logging.info("results written: {}".format(newrc))
+                resultcount = newrc
+            except KeyboardInterrupt:
+                break
+            
+        logging.info("ok - done")
+
+        logging.info("Waiting 0.5s for any stray responses")
+        time.sleep(0.5)
+        logging.info("removing filters and shutting down")
+
+        resultcount = _write_results(b, resultcount, metadata, config, dumpall=True)
+        logging.info("final result count: {}".format(resultcount))
+        if config.debug:
+            _print_debug_info(b)
+
+    with open("{}_meta.json".format(config.filebase), 'w') as outfile:
+        json.dump(metadata, outfile)
+
+
+def sanitychecks(args):
+    if args.probeint < 0 or args.probeint > 1000:
+        print("Invalid probe interval (0-1000 is allowed)")
+        sys.exit()
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('In-band measurement')
-    parser.add_argument('-d', '--debug', 
-                        action='store_true', default=False,
-                        help="Turning on some debugging output (incl. bpf_trace_printk messages")
-    parser.add_argument('-b', '--bunch', default=False, action='store_true',
-                        help="Turn on 'bunch' mode (default: off)")
-    parser.add_argument('-e', '--noether', default=True, action='store_false',
-                        help="No ethernet encapsulation (assume raw IP)")
-    parser.add_argument('-s', '--spacing', default=10000,
-                        help="Spacing between probes (or probe bunches) to each hop, in microseconds (default 10 millisec/10000 microsec)")
-    parser.add_argument('-o', '--outfile', default='inband', 
-                        help='File (basename) to write probe output data')
-    parser.add_argument('-t', '--maxttl', default=16, type=int,
-                        help="Set the max TTL value explicitly; otherwise use the number of hops from a traceroute to the destination")
-    parser.add_argument('-i', '--device', type=str, required=True,
-                        help='Network device name, e.g., eth0 to use')
-    parser.add_argument('-T', '--timeout', default=0, 
-                        help='Set timeout for external command to run (default: no timeout)')
-    parser.add_argument('hostnames', nargs='*',
-                        help='Additional hostnames (corresponding IP addrs) to trace')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-I', '--ingress', choices=('pass','drop'), default='drop', help='Specify how ingress ICMP time exceeded messages should be handled: pass through to OS or drop in XDP')
+    parser.add_argument('-l', '--logfile', default=False, action='store_true', help='Turn on logfile output')
+    parser.add_argument('-f', '--filebase', default='ebpf_probe', help='Configure base name for log and data output files')
+    parser.add_argument('-d', '--debug', default=False, action='store_true', help='Turn on debug logging')
+    parser.add_argument('-p', '--probeint', default=1, type=int, help='Minimum probe interval (milliseconds)')
+    parser.add_argument('-i', '--interface', required=True, type=str, help='Interface/device to use')
+    parser.add_argument('-e', '--encapsulation', choices=('ethernet', 'ipinip', 'ip6inip'), default='ethernet', help='How packets are encapsulated on the wire')
+    parser.add_argument('addresses', metavar='addresses', nargs='*', type=str, help='IP addresses of interest')
     args = parser.parse_args()
-
-    loglevel = logging.INFO
-    if args.debug:
-        loglevel = logging.DEBUG
-    FORMAT = '%(asctime)-15s %(levelname)-6s %(message)s'
-    logging.basicConfig(format=FORMAT, level=loglevel)
-
-    config = ProbeConfig(args)
-    main(config)
+    sanitychecks(args)
+    main(args)
