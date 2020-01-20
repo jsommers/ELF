@@ -1357,7 +1357,7 @@ int ingress_v4(struct xdp_md *ctx) {
         return INGRESS_ACTION;
     }
     offset = offset + sizeof(struct _iphdr);
-    u16 inipid = iph->id;
+    u16 inipid = bpf_ntohs(iph->id);
 
 #if DEBUG
     bpf_trace_printk("INGRESS ip4 ttl exc from 0x%x rttl %d idx %d\n", srcip, recvttl, *val);
@@ -1520,7 +1520,7 @@ int ingress_v6(struct xdp_md *ctx) {
     // the *inner* v6 header returned by some router where the packet died
     iph = (struct _ip6hdr*)(data + offset);
     _in6_addr_t origdst = iph->daddr;
-    u16 inipid = iph->ip6_un1_flow >> 16;
+    u16 inipid = bpf_ntohs(iph->ip6_un1_flow >> 16);
     val = NULL;
     if ((val = trie.lookup(&origdst)) == NULL) {
         return INGRESS_ACTION;
