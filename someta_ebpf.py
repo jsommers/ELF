@@ -87,14 +87,17 @@ class RunState(object):
         Do some basic setup for logging, bpf, etc.
         '''
         fmt = '%(asctime)-15s %(levelname)s %(message)s'
+        loglevel = logging.INFO
+        if self._args.debug:
+            loglevel = logging.DEBUG
         if self._args.logfile:
-            logging.basicConfig(level=logging.DEBUG, format=fmt, filename=self._args.filebase + '.log', filemode='w')
+            logging.basicConfig(level=loglevel, format=fmt, filename=self._args.filebase + '.log', filemode='w')
             sh = logging.StreamHandler()
-            sh.setLevel(logging.DEBUG)
+            sh.setLevel(loglevel)
             sh.setFormatter(logging.Formatter(fmt=fmt))
             logging.getLogger().addHandler(sh)
         else:
-            logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)s %(message)s')
+            logging.basicConfig(level=loglevel, format='%(asctime)-15s %(levelname)s %(message)s')
 
     def _open_pyroute2(self):
         '''
