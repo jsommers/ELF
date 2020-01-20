@@ -189,6 +189,13 @@ BPF_ARRAY(destinfo, struct probe_dest, MAXDEST); // index: value in trie hash
 BPF_HASH(sentinfo, u64, struct sent_info); // key: destid | sequence
 BPF_ARRAY(results, struct latency_sample, MAXRESULTS); // key: index 0 in counters
 
+struct mylock {
+    struct bpf_spin_lock lock;
+    u64 dummy;
+    int counter;
+};
+BPF_ARRAY(mylock, struct mylock, 1);
+
 static inline void _update_maxttl(int idx, int ttl) {
     struct probe_dest *pd = destinfo.lookup(&idx);
 
@@ -379,7 +386,14 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
         .protocol = IPPROTO_ICMP,
         .outipid = outipid,
     };
+    int lockidx = 0;
+    struct mylock *xlock = zelock.lookup(&lockidx);
+    if (!xlock) {
+        return TC_ACT_SHOT;
+    }
+    bpf_spin_lock(&xlock->lock);
     sentinfo.update(&sentkey, &si);
+    bpf_spin_unlock(&xlock->lock);
 
 #if DEBUG
     bpf_trace_printk("EGRESS icmp4 emitting probe %lu\n", sequence);
