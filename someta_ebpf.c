@@ -224,13 +224,14 @@ static inline void _decide_seq_ttl(struct probe_dest *pd, u16 *seq, u8 *ttl) {
     }
     *seq = pd->sequence;
     pd->sequence++;
-    bpf_trace_printk("EGRESS decide seqttl bitmap 0x%x seq %d\n", pd->hop_bitmap, *seq);
+    u32 bitmap = pd->hop_bitmap;
+    bpf_trace_printk("EGRESS decide_seq_ttl bitmap 0x%x seq %d\n", bitmap, *seq);
     
 #pragma unroll
     for (u16 i = 0; i < 8; i++) {
         u16 hop = (pd->next_hop_to_probe + i) % pd->maxttl;
         if (*seq < (pd->maxttl*3) || 
-            ((pd->hop_bitmap >> hop) & 0x1) == 0x1) {
+            ((bitmap >> hop) & 0x1) == 0x1) {
             *ttl = (u8)(hop + 1);
             pd->next_hop_to_probe = (hop + 1) % pd->maxttl;
             return;
@@ -248,6 +249,10 @@ static inline int _should_probe_dest(int idx) {
 
     u64 now = bpf_ktime_get_ns();
     if ((now - pd->last_send) > MIN_PROBE) {
+        pd->last_send = now; // update here, when checking
+                             // to avoid race between check and later 
+                             // clone, etc. and update
+                             // FIXME: still a race w/ multiple CPUs
         return TRUE;
     }
 
@@ -363,7 +368,6 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
 
     // save info about outgoing probe into hash
     // hashed on: idx|sequence
-    pd->last_send = now;
     u64 sentkey = (u64)idx << 32 | (u64)sequence;
     _in6_addr_t destaddr6 = {{{ destaddr, 0, 0, 0 }}};
     struct sent_info si = {
@@ -528,7 +532,6 @@ int egress_v4_tcp(struct __sk_buff *ctx) {
 
     // save info about outgoing probe into hash
     // hashed on: idx|sequence
-    pd->last_send = now;
     u64 sentkey = (u64)idx << 32 | (u64)sequence;
     _in6_addr_t destaddr6 = {{{ destaddr, 0, 0, 0 }}};
     struct sent_info si = {
@@ -704,7 +707,6 @@ int egress_v4_udp(struct __sk_buff *ctx) {
 
     // save info about outgoing probe into hash
     // hashed on: idx|sequence
-    pd->last_send = now;
     u64 sentkey = (u64)idx << 32 | (u64)sequence;
     _in6_addr_t destaddr6 = {{{ destaddr, 0, 0, 0 }}};
     struct sent_info si = {
@@ -862,7 +864,6 @@ int egress_v6_icmp(struct __sk_buff *ctx) {
 
     // save info about outgoing probe into hash
     // hashed on: idx|sequence
-    pd->last_send = now;
     u64 sentkey = (u64)idx << 32 | (u64)sequence;
     struct sent_info si = {
         .send_time = now,
@@ -1010,7 +1011,6 @@ int egress_v6_tcp(struct __sk_buff *ctx) {
 
     // save info about outgoing probe into hash
     // hashed on: idx|sequence
-    pd->last_send = now;
     u64 sentkey = (u64)idx << 32 | (u64)sequence;
     struct sent_info si = {
         .send_time = now,
@@ -1174,7 +1174,6 @@ int egress_v6_udp(struct __sk_buff *ctx) {
 
     // save info about outgoing probe into hash
     // hashed on: idx|sequence
-    pd->last_send = now;
     u64 sentkey = (u64)idx << 32 | (u64)sequence;
     struct sent_info si = {
         .send_time = now,
