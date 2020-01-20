@@ -86,9 +86,13 @@ class RunState(object):
         '''
         Do some basic setup for logging, bpf, etc.
         '''
+        fmt = '%(asctime)-15s %(levelname)s %(message)s'
         if self._args.logfile:
-            logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)s %(message)s', filename=self._args.filebase + '.log', filemode='w')
-            logging.getLogger().addHandler(logging.StreamHandler())
+            logging.basicConfig(level=logging.DEBUG, format=fmt, filename=self._args.filebase + '.log', filemode='w')
+            sh = logging.StreamHandler()
+            sh.setLevel(logging.DEBUG)
+            sh.setFormatter(logging.Formatter(fmt=fmt))
+            logging.getLogger().addHandler(sh)
         else:
             logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)s %(message)s')
 
@@ -226,10 +230,15 @@ def _write_results(b, rcount, metadata, config, dumpall=False):
 
     return rcount
 
-def _print_debug_info(b):
-    print('counters')
+def _print_debug_counters(b):
+    if not len(b['counters']):
+        return
+    logging.debug('counters')
     for k,v in b['counters'].items():
-        print("\t",k,v)
+        logging.debug("\t",k,v)
+
+def _print_debug_info(b):
+    _print_debug_counters(b)
 
     print('trie')
     for k,v in b['trie'].items():
@@ -275,6 +284,8 @@ def main(config):
         while True:
             try:
                 time.sleep(1)
+                logging.debug("wakeup")
+                _print_debug_counters(b)
                 newrc = _write_results(b, resultcount, metadata, config)
                 if newrc > resultcount:
                     logging.info("results written: {}".format(newrc))
