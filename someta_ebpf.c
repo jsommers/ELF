@@ -224,10 +224,7 @@ static inline void _decide_seq_ttl(struct probe_dest *pd, u16 *seq, u8 *ttl) {
     }
     *seq = pd->sequence;
     pd->sequence++;
-
-#if DEBUG
     bpf_trace_printk("EGRESS decide seqttl bitmap 0x%x seq %d\n", pd->hop_bitmap, *seq);
-#endif
     
 #pragma unroll
     for (u16 i = 0; i < 8; i++) {
@@ -263,7 +260,7 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
 #endif
     int idx = ctx->mark;
     struct probe_dest *pd = destinfo.lookup(&idx);
-    if (pd == NULL) {
+    if (!pd) {
         return TC_ACT_OK;
     }
 
@@ -320,7 +317,7 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
     }
 
     u16 old_ttl_proto = load_half(ctx, NHOFFSET + IP_TTL_OFF);
-    u16 new_ttl_proto = htons(((u16)newttl) << 8 | IPPROTO_ICMP);
+    u16 new_ttl_proto = bpf_htons(((u16)newttl) << 8 | IPPROTO_ICMP);
 
     // replace the IP checksum
     rv = bpf_l3_csum_replace(ctx, NHOFFSET + IP_CSUM_OFF, htons(old_ttl_proto), new_ttl_proto, 2);
