@@ -86,11 +86,18 @@ class RunState(object):
         '''
         Do some basic setup for logging, bpf, etc.
         '''
+        fmt = '%(asctime)-15s %(levelname)s %(message)s'
+        loglevel = logging.INFO
+        if self._args.debug:
+            loglevel = logging.DEBUG
         if self._args.logfile:
-            logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)s %(message)s', filename=self._args.filebase + '.log', filemode='w')
-            logging.getLogger().addHandler(logging.StreamHandler())
+            logging.basicConfig(level=loglevel, format=fmt, filename=self._args.filebase + '.log', filemode='w')
+            sh = logging.StreamHandler()
+            sh.setLevel(loglevel)
+            sh.setFormatter(logging.Formatter(fmt=fmt))
+            logging.getLogger().addHandler(sh)
         else:
-            logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)s %(message)s')
+            logging.basicConfig(level=loglevel, format='%(asctime)-15s %(levelname)s %(message)s')
 
     def _open_pyroute2(self):
         '''
@@ -142,8 +149,7 @@ class RunState(object):
         self._bcc_debugflag = bcc.DEBUG_SOURCE
         if self._args.debug:
             cflags.append('-DDEBUG=1')
-            bcc_debugflag = bcc.DEBUG_BPF_REGISTER_STATE | bcc.DEBUG_SOURCE | bcc.DEBUG_BPF | bcc.DEBUG_LLVM_IR
-            self._bcc_debugflag |= bcc.DEBUG_SOURCE
+            bcc_debugflag = bcc.DEBUG_BPF_REGISTER_STATE | bcc.DEBUG_SOURCE | bcc.DEBUG_BPF | bcc.DEBUG_LLVM_IR | bcc.DEBUG_BTF
 
         self._cflags = cflags
 
@@ -158,6 +164,7 @@ class RunState(object):
         b = BPF(src_file='someta_ebpf.c', debug=self._bcc_debugflag, cflags=self._cflags)
 
         self._register_addresses_of_interest(b, metadata)
+        b['counters'][ctypes.c_int(RESULTS_IDX)] = ctypes.c_int(0)
 
         egress_fn = b.load_func('egress_path', BPF.SCHED_CLS)
         ingress_fn = b.load_func("ingress_path", BPF.XDP)
@@ -201,19 +208,15 @@ class RunState(object):
                 new_address_of_interest(b['trie'], addr, destinfo)
 
 def _write_results(b, rcount, metadata, config, dumpall=False):
-    resultval = -1
-    for k,v in b['counters'].items():
-        if k.value == RESULTS_IDX:
-            rc = v.value
-    if resultval > -1:
-        while rcount < rc:
-            resultidx = rcount % MAX_RESULTS
-            res = b['results'][resultidx]
-            if config.debug:
-                print("latsamp", resultidx, res.sequence, res.origseq, res.recv-res.send, res.send, res.recv, res.sport, res.dport, res.outttl, res.recvttl, to_ipaddr(res.responder), to_ipaddr(res.target), res.protocol, res.outipid, res.inipid)
-            d = {'seq':res.sequence, 'origseq':res.origseq, 'latency':(res.recv-res.send), 'sendtime':res.send, 'recvtime':res.recv, 'dest':str(to_ipaddr(res.target)), 'responder':str(to_ipaddr(res.responder)), 'outttl':res.outttl, 'recvttl':res.recvttl, 'sport':res.sport, 'dport':res.dport, 'protocol':res.protocol, 'outipid':res.outipid, 'inipid':res.inipid}
-            metadata['results'].append(d)
-            rcount += 1
+    rc = b['counters'][ctypes.c_int(RESULTS_IDX)]
+    while rcount < rc.value:
+        resultidx = rcount % MAX_RESULTS
+        res = b['results'][resultidx]
+        if config.debug:
+            print("latsamp", resultidx, res.sequence, res.origseq, res.recv-res.send, res.send, res.recv, res.sport, res.dport, res.outttl, res.recvttl, to_ipaddr(res.responder), to_ipaddr(res.target), res.protocol, res.outipid, res.inipid)
+        d = {'seq':res.sequence, 'origseq':res.origseq, 'latency':(res.recv-res.send), 'sendtime':res.send, 'recvtime':res.recv, 'dest':str(to_ipaddr(res.target)), 'responder':str(to_ipaddr(res.responder)), 'outttl':res.outttl, 'recvttl':res.recvttl, 'sport':res.sport, 'dport':res.dport, 'protocol':res.protocol, 'outipid':res.outipid, 'inipid':res.inipid}
+        metadata['results'].append(d)
+        rcount += 1
 
     if dumpall:
         for k,v in b['sentinfo'].items():
@@ -226,10 +229,15 @@ def _write_results(b, rcount, metadata, config, dumpall=False):
 
     return rcount
 
-def _print_debug_info(b):
-    print('counters')
+def _print_debug_counters(b):
+    if not len(b['counters']):
+        return
+    logging.debug('counters')
     for k,v in b['counters'].items():
-        print("\t",k,v)
+        logging.debug("\t{}->{}".format(k,v))
+
+def _print_debug_info(b):
+    _print_debug_counters(b)
 
     print('trie')
     for k,v in b['trie'].items():
@@ -275,6 +283,8 @@ def main(config):
         while True:
             try:
                 time.sleep(1)
+                logging.debug("wakeup resultcount {}".format(resultcount))
+                _print_debug_counters(b)
                 newrc = _write_results(b, resultcount, metadata, config)
                 if newrc > resultcount:
                     logging.info("results written: {}".format(newrc))
@@ -282,9 +292,7 @@ def main(config):
             except KeyboardInterrupt:
                 break
             
-        logging.info("ok - done")
-
-        logging.info("Waiting 0.5s for any stray responses")
+        logging.info("done; waiting 0.5s for any stray responses")
         time.sleep(0.5)
         logging.info("removing filters and shutting down")
 
