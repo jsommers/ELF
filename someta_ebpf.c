@@ -388,7 +388,7 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
         .outipid = outipid,
     };
     int lockidx = 0;
-    struct mylock *xlock = zelock.lookup(&lockidx);
+    struct mylock *xlock = mylock.lookup(&lockidx);
     if (!xlock) {
         return TC_ACT_SHOT;
     }
