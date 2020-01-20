@@ -320,7 +320,7 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
     u16 new_ttl_proto = bpf_htons(((u16)newttl) << 8 | IPPROTO_ICMP);
 
     // replace the IP checksum
-    rv = bpf_l3_csum_replace(ctx, NHOFFSET + IP_CSUM_OFF, htons(old_ttl_proto), new_ttl_proto, 2);
+    rv = bpf_l3_csum_replace(ctx, NHOFFSET + IP_CSUM_OFF, bpf_htons(old_ttl_proto), new_ttl_proto, 2);
     if (rv < 0) {
 #if DEBUG
         bpf_trace_printk("EGRESS icmp4 failed to replace csum\n");
@@ -339,7 +339,7 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
 
     // rewrite seq in ICMP hdr
     u16 oldseq = load_half(ctx, offset + ICMP_SEQ_OFF);
-    u16 newseq = htons(sequence);
+    u16 newseq = bpf_htons(sequence);
     rv = bpf_skb_store_bytes(ctx, offset + ICMP_SEQ_OFF, &newseq, sizeof(newseq), 0);
     if (rv < 0) {
 #if DEBUG
@@ -347,12 +347,12 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
 #endif
         return TC_ACT_SHOT;
     }
-    newseq = ntohs(newseq);
+    newseq = bpf_ntohs(newseq);
 
     // fixup ICMP checksum
     u16 oldcsum = load_half(ctx, offset + ICMP_CSUM_OFF);
     u16 newcsum = oldcsum - (newseq - oldseq); 
-    newcsum = htons(newcsum);
+    newcsum = bpf_htons(newcsum);
     rv = bpf_skb_store_bytes(ctx, offset + ICMP_CSUM_OFF, &newcsum, sizeof(newcsum), 0);
     if (rv < 0) {
 #if DEBUG
@@ -417,7 +417,7 @@ int egress_v4_tcp(struct __sk_buff *ctx) {
     u16 dport = load_half(ctx, offset + TCP_DST_OFF);
 
     u64 now = bpf_ktime_get_ns();
-    u32 origseq = ntohs(load_word(ctx, offset + TCP_SEQ_OFF));
+    u32 origseq = bpf_ntohs(load_word(ctx, offset + TCP_SEQ_OFF));
     u16 sequence = 0;
     u8 newttl = 0;
     u32 destaddr = load_word(ctx, NHOFFSET + IP_DST_OFF);
@@ -425,7 +425,7 @@ int egress_v4_tcp(struct __sk_buff *ctx) {
     _decide_seq_ttl(pd, &sequence, &newttl);
 
     u64 cksum64 = bpf_csum_diff(0, 0, data + NHOFFSET + IP_SRC_OFF, sizeof(u32)*2, 0);
-    u32 tmp = htonl(((u32)IPPROTO_TCP << 16) | 20);
+    u32 tmp = bpf_htonl(((u32)IPPROTO_TCP << 16) | 20);
     cksum64 = bpf_csum_diff(0, 0, &tmp, sizeof(tmp), cksum64);
     
 #if DEBUG
@@ -448,10 +448,10 @@ int egress_v4_tcp(struct __sk_buff *ctx) {
 
     struct _tcphdr newtcp;
     __builtin_memset(&newtcp, 0, sizeof(struct _tcphdr));
-    newtcp.th_sport = htons(sport);
-    newtcp.th_dport = htons(dport);
-    newtcp.th_seq = htonl(sequence);
-    newtcp.th_ack = htonl(load_word(ctx, NHOFFSET + iphlen + TCP_ACK_OFF));
+    newtcp.th_sport = bpf_htons(sport);
+    newtcp.th_dport = bpf_htons(dport);
+    newtcp.th_seq = bpf_htonl(sequence);
+    newtcp.th_ack = bpf_htonl(load_word(ctx, NHOFFSET + iphlen + TCP_ACK_OFF));
     newtcp.th_off = 0x50;
     newtcp.th_flags = TH_ACK;
 
@@ -489,8 +489,8 @@ int egress_v4_tcp(struct __sk_buff *ctx) {
         return TC_ACT_SHOT;
     }
     
-    new_ip_len = htons(new_ip_len);
-    curr_ip_len = htons(curr_ip_len);
+    new_ip_len = bpf_htons(new_ip_len);
+    curr_ip_len = bpf_htons(curr_ip_len);
     rv = bpf_l3_csum_replace(ctx, NHOFFSET + IP_CSUM_OFF, curr_ip_len, new_ip_len, 2);
     if (rv < 0) {
 #if DEBUG
@@ -508,9 +508,9 @@ int egress_v4_tcp(struct __sk_buff *ctx) {
     }
 
     u16 old_ttl_proto = load_half(ctx, NHOFFSET + IP_TTL_OFF);
-    u16 new_ttl_proto = htons(((u16)newttl) << 8 | IPPROTO_TCP);
+    u16 new_ttl_proto = bpf_htons(((u16)newttl) << 8 | IPPROTO_TCP);
 
-    rv = bpf_l3_csum_replace(ctx, NHOFFSET + IP_CSUM_OFF, htons(old_ttl_proto), new_ttl_proto, 2);
+    rv = bpf_l3_csum_replace(ctx, NHOFFSET + IP_CSUM_OFF, bpf_htons(old_ttl_proto), new_ttl_proto, 2);
     if (rv < 0) {
 #if DEBUG
         bpf_trace_printk("EGRESS tcp4 failed to replace ip csum\n");
@@ -589,13 +589,13 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     u16 outipid = load_half(ctx, NHOFFSET + IP_ID_OFF);
     _decide_seq_ttl(pd, &sequence, &newttl);
 
-    u32 srcaddr = ntohl(load_word(ctx, NHOFFSET + IP_SRC_OFF));
-    u32 csum = ntohl(destaddr);
+    u32 srcaddr = bpf_ntohl(load_word(ctx, NHOFFSET + IP_SRC_OFF));
+    u32 csum = bpf_ntohl(destaddr);
     csum = (csum & 0xffff) + (csum >> 16);
     csum += (srcaddr & 0xffff);
     csum += (srcaddr >> 16);
-    csum += (u16)htons(20);
-    csum += (u16)htons(IPPROTO_UDP);
+    csum += (u16)bpf_htons(20);
+    csum += (u16)bpf_htons(IPPROTO_UDP);
     
 #if DEBUG
     bpf_trace_printk("EGRESS udp4 outgoing seq %lu origseq 0x%x\n", sequence, origseq);
@@ -615,10 +615,10 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     bpf_trace_printk("EGRESS udp4 after clone emit %lu\n", sequence);
 #endif
 
-    csum += htons(sport);
-    csum += htons(dport);
-    csum += htons(20);
-    csum += htons(sequence);
+    csum += bpf_htons(sport);
+    csum += bpf_htons(dport);
+    csum += bpf_htons(20);
+    csum += bpf_htons(sequence);
     csum = (csum >> 16) + (csum & 0xffff);
     csum += (csum >> 16);
     csum = (u16)(~csum & 0xffff);
@@ -626,10 +626,10 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     u16 payload[6] = {(u16)csum,0,0,0,0,0};
     
     struct _udphdr newudp = {
-        .uh_sport = htons(sport),
-        .uh_dport = htons(dport),
-        .uh_ulen = htons(20),
-        .uh_sum = htons(sequence),
+        .uh_sport = bpf_htons(sport),
+        .uh_dport = bpf_htons(dport),
+        .uh_ulen = bpf_htons(20),
+        .uh_sum = bpf_htons(sequence),
     };
 
     // get current header value
@@ -665,8 +665,8 @@ int egress_v4_udp(struct __sk_buff *ctx) {
         return TC_ACT_SHOT;
     }
 
-    new_ip_len = htons(new_ip_len);
-    curr_ip_len = htons(curr_ip_len);
+    new_ip_len = bpf_htons(new_ip_len);
+    curr_ip_len = bpf_htons(curr_ip_len);
     rv = bpf_l3_csum_replace(ctx, NHOFFSET + IP_CSUM_OFF, curr_ip_len, new_ip_len, 2);
     if (rv < 0) {
 #if DEBUG
@@ -684,9 +684,9 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     }
 
     u16 old_ttl_proto = load_half(ctx, NHOFFSET + IP_TTL_OFF);
-    u16 new_ttl_proto = htons(((u16)newttl) << 8 | IPPROTO_UDP);
+    u16 new_ttl_proto = bpf_htons(((u16)newttl) << 8 | IPPROTO_UDP);
 
-    rv = bpf_l3_csum_replace(ctx, NHOFFSET + IP_CSUM_OFF, htons(old_ttl_proto), new_ttl_proto, 2);
+    rv = bpf_l3_csum_replace(ctx, NHOFFSET + IP_CSUM_OFF, bpf_htons(old_ttl_proto), new_ttl_proto, 2);
     if (rv < 0) {
 #if DEBUG
         bpf_trace_printk("EGRESS udp4 failed to replace csum\n");
@@ -838,7 +838,7 @@ int egress_v6_icmp(struct __sk_buff *ctx) {
 
     // rewrite seq in ICMP hdr
     u16 oldseq = load_half(ctx, offset + ICMP_SEQ_OFF);
-    u16 newseq = htons(sequence);
+    u16 newseq = bpf_htons(sequence);
     rv = bpf_skb_store_bytes(ctx, offset + ICMP_SEQ_OFF, &newseq, sizeof(newseq), 0);
     if (rv < 0) {
 #if DEBUG
@@ -846,12 +846,12 @@ int egress_v6_icmp(struct __sk_buff *ctx) {
 #endif
         return TC_ACT_SHOT;
     }
-    newseq = ntohs(newseq);
+    newseq = bpf_ntohs(newseq);
 
     // fixup ICMP checksum
     u16 oldcsum = load_half(ctx, offset + ICMP_CSUM_OFF);
     u16 newcsum = oldcsum - (newseq - oldseq); 
-    newcsum = htons(newcsum);
+    newcsum = bpf_htons(newcsum);
     rv = bpf_skb_store_bytes(ctx, offset + ICMP_CSUM_OFF, &newcsum, sizeof(newcsum), 0);
     if (rv < 0) {
 #if DEBUG
@@ -913,15 +913,15 @@ int egress_v6_tcp(struct __sk_buff *ctx) {
     u16 dport = load_half(ctx, offset + TCP_DST_OFF);
 
     u64 now = bpf_ktime_get_ns();
-    u32 origseq = ntohs(load_word(ctx, offset + TCP_SEQ_OFF));
+    u32 origseq = bpf_ntohs(load_word(ctx, offset + TCP_SEQ_OFF));
     u16 sequence = 0;
     u8 newttl = 0;
     _in6_addr_t destaddr;
     // compute checksum pseudoheader value
     u64 cksum64 = bpf_csum_diff(0, 0, data + NHOFFSET + IP6_SRC_OFF, sizeof(_in6_addr_t) * 2, 0);
-    u32 tmp = htonl(20);
+    u32 tmp = bpf_htonl(20);
     cksum64 = bpf_csum_diff(0, 0, &tmp, sizeof(tmp), cksum64);
-    tmp = htonl(6);
+    tmp = bpf_htonl(6);
     cksum64 = bpf_csum_diff(0, 0, &tmp, sizeof(tmp), cksum64);
 
 #pragma unroll
@@ -951,10 +951,10 @@ int egress_v6_tcp(struct __sk_buff *ctx) {
 
     struct _tcphdr newtcp;
     __builtin_memset(&newtcp, 0, sizeof(struct _tcphdr));
-    newtcp.th_sport = htons(sport);
-    newtcp.th_dport = htons(dport);
-    newtcp.th_seq = htonl(sequence);
-    newtcp.th_ack = htonl(load_word(ctx, NHOFFSET + sizeof(struct _ip6hdr) + TCP_ACK_OFF));
+    newtcp.th_sport = bpf_htons(sport);
+    newtcp.th_dport = bpf_htons(dport);
+    newtcp.th_seq = bpf_htonl(sequence);
+    newtcp.th_ack = bpf_htonl(load_word(ctx, NHOFFSET + sizeof(struct _ip6hdr) + TCP_ACK_OFF));
     newtcp.th_off = 0x50;
     newtcp.th_flags = TH_ACK;
 
@@ -991,7 +991,7 @@ int egress_v6_tcp(struct __sk_buff *ctx) {
         return TC_ACT_SHOT;
     }
 
-    new_ip_len = htons(new_ip_len);
+    new_ip_len = bpf_htons(new_ip_len);
     rv = bpf_skb_store_bytes(ctx, NHOFFSET + IP6_LEN_OFF, &new_ip_len, sizeof(new_ip_len), 0);
     if (rv < 0) {
 #if DEBUG
@@ -1068,14 +1068,14 @@ int egress_v6_udp(struct __sk_buff *ctx) {
     for (int i = 0; i < 4; i++) {
         u32 tmp = load_word(ctx, NHOFFSET + IP6_DST_OFF + i*4);
         destaddr._u._addr32[i] = tmp;
-        tmp = ntohl(tmp);
+        tmp = bpf_ntohl(tmp);
         csum += (tmp & 0xffff);
         csum += (tmp >> 16);
     }
 
 #pragma unroll
     for (int i = 0; i < 4; i++) {
-        u32 tmp = ntohl(load_word(ctx, NHOFFSET + IP6_SRC_OFF + i*4));
+        u32 tmp = bpf_ntohl(load_word(ctx, NHOFFSET + IP6_SRC_OFF + i*4));
         csum += (tmp & 0xffff);
         csum += (tmp >> 16);
     }
@@ -1088,8 +1088,8 @@ int egress_v6_udp(struct __sk_buff *ctx) {
     bpf_trace_printk("EGRESS udp6 outgoing seq %lu origseq 0x%x\n", sequence, origseq);
 #endif
 
-    csum += (u16)htons(20);
-    csum += (u16)htons(IPPROTO_UDP);
+    csum += (u16)bpf_htons(20);
+    csum += (u16)bpf_htons(IPPROTO_UDP);
 
     // clone and redirect the original pkt out the intended interface
     int rv = bpf_clone_redirect(ctx, IFINDEX, 0);
@@ -1105,10 +1105,10 @@ int egress_v6_udp(struct __sk_buff *ctx) {
     bpf_trace_printk("EGRESS udp6 after clone emit %lu\n", sequence);
 #endif
 
-    csum += htons(sport);
-    csum += htons(dport);
-    csum += htons(20);
-    csum += htons(sequence);
+    csum += bpf_htons(sport);
+    csum += bpf_htons(dport);
+    csum += bpf_htons(20);
+    csum += bpf_htons(sequence);
     csum = (csum >> 16) + (csum & 0xffff);
     csum += (csum >> 16);
     csum = (u16)(~csum & 0xffff);
@@ -1116,10 +1116,10 @@ int egress_v6_udp(struct __sk_buff *ctx) {
     u16 payload[6] = {(u16)csum,0,0,0,0,0};
     
     struct _udphdr newudp = {
-        .uh_sport = htons(sport),
-        .uh_dport = htons(dport),
-        .uh_ulen = htons(20),
-        .uh_sum = htons(sequence),
+        .uh_sport = bpf_htons(sport),
+        .uh_dport = bpf_htons(dport),
+        .uh_ulen = bpf_htons(20),
+        .uh_sum = bpf_htons(sequence),
     };
 
     // get current header value
@@ -1155,7 +1155,7 @@ int egress_v6_udp(struct __sk_buff *ctx) {
         return TC_ACT_SHOT;
     }
 
-    new_ip_len = htons(new_ip_len);
+    new_ip_len = bpf_htons(new_ip_len);
     rv = bpf_skb_store_bytes(ctx, NHOFFSET + IP6_LEN_OFF, &new_ip_len, sizeof(new_ip_len), 0);
     if (rv < 0) {
 #if DEBUG
@@ -1251,9 +1251,9 @@ int egress_path(struct __sk_buff *ctx) {
         return TC_ACT_OK;
     }
     struct _ethhdr *eth = (struct _ethhdr *)data;
-    if (eth->ether_type == htons(ETHERTYPE_IP)) {
+    if (eth->ether_type == bpf_htons(ETHERTYPE_IP)) {
         ipproto = 4;
-    } else if (eth->ether_type == htons(ETHERTYPE_IP6)) {
+    } else if (eth->ether_type == bpf_htons(ETHERTYPE_IP6)) {
         ipproto = 6;
     }
 #endif
@@ -1276,9 +1276,9 @@ int ingress_path(struct xdp_md *ctx) {
         return XDP_PASS;
     }
     struct _ethhdr *eth = (struct _ethhdr *)data;
-    if (eth->ether_type == htons(ETHERTYPE_IP)) {
+    if (eth->ether_type == bpf_htons(ETHERTYPE_IP)) {
         ipproto = 4;
-    } else if (eth->ether_type == htons(ETHERTYPE_IP6)) {
+    } else if (eth->ether_type == bpf_htons(ETHERTYPE_IP6)) {
         ipproto = 6;
     }
 #endif
@@ -1317,7 +1317,7 @@ int ingress_v4(struct xdp_md *ctx) {
     // compute hdr size + shift ahead
     offset = offset + ((iph->verihl&0x0f) << 2);
 #ifdef DEBUG
-    bpf_trace_printk("INGRESS ip4 from 0x%lx hsize %d\n", ntohl(iph->saddr), ((iph->verihl&0x0f) << 2));
+    bpf_trace_printk("INGRESS ip4 from 0x%lx hsize %d\n", bpf_ntohl(iph->saddr), ((iph->verihl&0x0f) << 2));
 #endif
     if (data + offset + sizeof(struct _icmphdr) > data_end) {
         return XDP_PASS;
@@ -1328,13 +1328,13 @@ int ingress_v4(struct xdp_md *ctx) {
     }
 
 #ifdef DEBUG
-    bpf_trace_printk("INGRESS ip4 icmp time exceeded from 0x%lx\n", ntohl(iph->saddr));
+    bpf_trace_printk("INGRESS ip4 icmp time exceeded from 0x%lx\n", bpf_ntohl(iph->saddr));
 #endif
 
     // FIXME: not doing this yet, but can use this len to determine
     // whether there are any extension headers a la rfc4884 
     // (and rfc4950 extensions in particular)
-    int inner_pktlen = ntohs(icmp->icmp_reserved[1]);
+    int inner_pktlen = bpf_ntohs(icmp->icmp_reserved[1]);
     if (inner_pktlen == 0) {
         inner_pktlen = sizeof(struct _iphdr) + 8;
     }
@@ -1376,11 +1376,11 @@ int ingress_v4(struct xdp_md *ctx) {
         return INGRESS_ACTION;
     }
     u16 seq = *(u16*)(data + offset + sequence_offset);
-    seq = ntohs(seq);
+    seq = bpf_ntohs(seq);
     u16 sport = *(u16*)(data + offset);
-    sport = ntohs(sport);
+    sport = bpf_ntohs(sport);
     u16 dport = *(u16*)(data + offset + 2);
-    dport = ntohs(dport);
+    dport = bpf_ntohs(dport);
 #if DEBUG
     bpf_trace_printk("INGRESS ip4 seq %d proto %d from %d received\n", seq, iph->protocol, *val);
 #endif
@@ -1418,8 +1418,8 @@ int ingress_v4(struct xdp_md *ctx) {
     latsamp->protocol = iph->protocol;
 #pragma unroll
     for (int i = 0; i < 4; i++) {
-        latsamp->responder._u._addr32[i] = htonl(source._u._addr32[i]);
-        latsamp->target._u._addr32[i] = htonl(origdst._u._addr32[i]);
+        latsamp->responder._u._addr32[i] = bpf_htonl(source._u._addr32[i]);
+        latsamp->target._u._addr32[i] = bpf_htonl(origdst._u._addr32[i]);
     }
 
     u64 sentkey = (u64)*val << 32 | (u64)seq;
@@ -1483,8 +1483,8 @@ int ingress_v6(struct xdp_md *ctx) {
     }
 
 #ifdef DEBUG
-    bpf_trace_printk("INGRESS ip6 from %lx:%lx:", ntohl(source._u._addr32[0]), ntohl(source._u._addr32[1]));
-    bpf_trace_printk("%lx:%lx\n", ntohl(source._u._addr32[2]), ntohl(source._u._addr32[3]));
+    bpf_trace_printk("INGRESS ip6 from %lx:%lx:", bpf_ntohl(source._u._addr32[0]), bpf_ntohl(source._u._addr32[1]));
+    bpf_trace_printk("%lx:%lx\n", bpf_ntohl(source._u._addr32[2]), bpf_ntohl(source._u._addr32[3]));
 #endif
     offset = offset + sizeof(struct _ip6hdr);
     if (data + offset + sizeof(struct _icmphdr) > data_end) {
@@ -1502,12 +1502,12 @@ int ingress_v6(struct xdp_md *ctx) {
     // FIXME: not doing this yet, but can use this len to determine
     // whether there are any extension headers a la rfc4884 
     // (and rfc4950 extensions in particular)
-    int inner_pktlen = ntohs(icmp->icmp_reserved[1]);
+    int inner_pktlen = bpf_ntohs(icmp->icmp_reserved[1]);
     if (inner_pktlen == 0) {
         inner_pktlen = sizeof(struct _ip6hdr) + 8;
     }
 
-    int outerlen = ntohs(iph->payload_length);
+    int outerlen = bpf_ntohs(iph->payload_length);
     offset = offset + sizeof(struct _icmphdr);
 
     uint8_t recvttl = iph->hop_limit;
@@ -1551,11 +1551,11 @@ int ingress_v6(struct xdp_md *ctx) {
 #endif
 
     u16 seq = *(u16*)(data + offset + sequence_offset);
-    seq = ntohs(seq);
+    seq = bpf_ntohs(seq);
     u16 sport = *(u16*)(data + offset);
-    sport = ntohs(sport);
+    sport = bpf_ntohs(sport);
     u16 dport = *(u16*)(data + offset + 2);
-    dport = ntohs(dport);
+    dport = bpf_ntohs(dport);
 #if DEBUG
     bpf_trace_printk("INGRESS ip6 seq %d proto %d from %d received\n", seq, iph->protocol, *val);
 #endif
@@ -1592,8 +1592,8 @@ int ingress_v6(struct xdp_md *ctx) {
     latsamp->protocol = iph->protocol;
 #pragma unroll
     for (int i = 0; i < 4; i++) {
-        latsamp->responder._u._addr32[i] = htonl(source._u._addr32[i]);
-        latsamp->target._u._addr32[i] = htonl(origdst._u._addr32[i]);
+        latsamp->responder._u._addr32[i] = bpf_htonl(source._u._addr32[i]);
+        latsamp->target._u._addr32[i] = bpf_htonl(origdst._u._addr32[i]);
     }
     counters.increment(RESULTS_IDX);
 
