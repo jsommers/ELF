@@ -209,16 +209,32 @@ class RunState(object):
                 metadata['hosts'][addr] = name
                 new_address_of_interest(b['trie'], addr, destinfo)
 
-def _write_results(b, rcount, metadata, config, dumpall=False):
-    rc = b['counters'][ctypes.c_int(RESULTS_IDX)]
-    while rcount < rc.value:
-        resultidx = rcount % MAX_RESULTS
-        res = b['results'][resultidx]
-        if config.debug:
-            print("latsamp", resultidx, res.sequence, res.origseq, res.recv-res.send, res.send, res.recv, res.sport, res.dport, res.outttl, res.recvttl, to_ipaddr(res.responder), to_ipaddr(res.target), res.protocol, res.outipid, res.inipid)
-        d = {'seq':res.sequence, 'origseq':res.origseq, 'latency':(res.recv-res.send), 'sendtime':res.send, 'recvtime':res.recv, 'dest':str(to_ipaddr(res.target)), 'responder':str(to_ipaddr(res.responder)), 'outttl':res.outttl, 'recvttl':res.recvttl, 'sport':res.sport, 'dport':res.dport, 'protocol':res.protocol, 'outipid':res.outipid, 'inipid':res.inipid}
-        metadata['results'].append(d)
-        rcount += 1
+def _write_results(b, rcounts, metadata, config, dumpall=False):
+    xcount = 0
+    rc  = b['resultscount'][0]
+    results = b['results']
+    for cpu in range(len(rcounts)):
+        if rc[cpu] > rcounts[cpu] and config.debug:
+            logging.debug("Got {} results on cpu {}".format(rcounts[cpu] - rc[cpu], cpu))
+        while rcounts[cpu] < rc[cpu]:
+            resultidx = rcounts[cpu] % MAX_RESULTS
+            res = results[resultidx][cpu]
+            rcounts[cpu] += 1
+            xcount += 1
+            if config.debug:
+                print("latsamp", cpu, resultidx, res.sequence, res.origseq, res.recv-res.send, res.send, res.recv, res.sport, res.dport, res.outttl, res.recvttl, to_ipaddr(res.responder), to_ipaddr(res.target), res.protocol, res.outipid, res.inipid)
+            d = {'recvcpu':cpu, 'seq':res.sequence, 'origseq':res.origseq, 'latency':(res.recv-res.send), 'sendtime':res.send, 'recvtime':res.recv, 'dest':str(to_ipaddr(res.target)), 'responder':str(to_ipaddr(res.responder)), 'outttl':res.outttl, 'recvttl':res.recvttl, 'sport':res.sport, 'dport':res.dport, 'protocol':res.protocol, 'outipid':res.outipid, 'inipid':res.inipid}
+            metadata['results'].append(d)
+
+#    rc = b['counters'][ctypes.c_int(RESULTS_IDX)]
+#    while rcount < rc.value:
+#        resultidx = rcount % MAX_RESULTS
+#        res = b['results'][resultidx]
+#        if config.debug:
+#            print("latsamp", resultidx, res.sequence, res.origseq, res.recv-res.send, res.send, res.recv, res.sport, res.dport, res.outttl, res.recvttl, to_ipaddr(res.responder), to_ipaddr(res.target), res.protocol, res.outipid, res.inipid)
+#        d = {'seq':res.sequence, 'origseq':res.origseq, 'latency':(res.recv-res.send), 'sendtime':res.send, 'recvtime':res.recv, 'dest':str(to_ipaddr(res.target)), 'responder':str(to_ipaddr(res.responder)), 'outttl':res.outttl, 'recvttl':res.recvttl, 'sport':res.sport, 'dport':res.dport, 'protocol':res.protocol, 'outipid':res.outipid, 'inipid':res.inipid}
+#        metadata['results'].append(d)
+#        rcount += 1
 
     if dumpall:
         for k,v in b['sentinfo'].items():
@@ -228,8 +244,9 @@ def _write_results(b, rcount, metadata, config, dumpall=False):
                 print("sent", idx, seq, v.origseq, v.send_time, to_ipaddr(v.dest), v.outttl, v.sport, v.dport, v.protocol, v.outipid)
             d = {'seq':seq, 'origseq':v.origseq, 'sendtime':v.send_time, 'dest':str(to_ipaddr(v.dest)), 'outttl':v.outttl, 'sport':v.sport, 'dport':v.dport, 'recvtime':0, 'responder':'', 'recvttl':-1, 'latency':-1, 'protocol':v.protocol, 'outipid':v.outipid}
             metadata['results'].append(d)
+            xcount += 1
 
-    return rcount
+    return xcount
 
 def _print_debug_counters(b):
     if not len(b['counters']):
@@ -281,16 +298,17 @@ def main(config):
         metadata['results'] = []
 
         logging.info("start")
-        resultcount = 0
+        rc = 0
+        resultcounts = [0]*48 # FIXME: number of cpus
         while True:
             try:
                 time.sleep(1)
-                logging.debug("wakeup resultcount {}".format(resultcount))
+                logging.debug("wakeup resultcount {}".format(rc))
                 _print_debug_counters(b)
-                newrc = _write_results(b, resultcount, metadata, config)
-                if newrc > resultcount:
-                    logging.info("results written: {}".format(newrc))
-                resultcount = newrc
+                newrc = _write_results(b, resultcounts, metadata, config)
+                rc += newrc
+                if newrc > 0:
+                    logging.info("new results written: {}, total: {}".format(newrc, rc))
             except KeyboardInterrupt:
                 break
             
@@ -298,8 +316,8 @@ def main(config):
         time.sleep(0.5)
         logging.info("removing filters and shutting down")
 
-        resultcount = _write_results(b, resultcount, metadata, config, dumpall=True)
-        logging.info("final result count: {}".format(resultcount))
+        rc += _write_results(b, resultcounts, metadata, config, dumpall=True)
+        logging.info("final result count: {}".format(rc))
         if config.debug:
             _print_debug_info(b)
 

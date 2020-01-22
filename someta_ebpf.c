@@ -110,8 +110,7 @@ struct _icmphdr {
 #endif
 
 #define MAXDEST     128
-#define MAXRESULTS  16384
-#define RESULTS_IDX 256
+#define MAXRESULTS  8192
 
 #define IP_TTL_OFF offsetof(struct _iphdr, ttl)
 #define IP_SRC_OFF offsetof(struct _iphdr, saddr)
@@ -184,17 +183,11 @@ BPF_PROG_ARRAY(egress_v4_proto, 256);
 BPF_PROG_ARRAY(egress_v6_proto, 256);
 
 BPF_HASH(trie, _in6_addr_t, u64); // key: dest address
-BPF_HISTOGRAM(counters, u64, RESULTS_IDX*2);
+BPF_HISTOGRAM(counters, u64, 256);
 BPF_ARRAY(destinfo, struct probe_dest, MAXDEST); // index: value in trie hash
 BPF_HASH(sentinfo, u64, struct sent_info); // key: destid | sequence
-BPF_ARRAY(results, struct latency_sample, MAXRESULTS); // key: index 0 in counters
-
-struct mylock {
-    struct bpf_spin_lock lock;
-    u64 dummy;
-    int counter;
-};
-BPF_ARRAY(mylock, struct mylock, 1);
+BPF_PERCPU_ARRAY(results, struct latency_sample, MAXRESULTS); // key: index 0 in counters
+BPF_PERCPU_ARRAY(resultscount, int, 1);
 
 static inline void _update_maxttl(int idx, int ttl) {
     struct probe_dest *pd = destinfo.lookup(&idx);
@@ -387,14 +380,7 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
         .protocol = IPPROTO_ICMP,
         .outipid = outipid,
     };
-    int lockidx = 0;
-    struct mylock *xlock = mylock.lookup(&lockidx);
-    if (!xlock) {
-        return TC_ACT_SHOT;
-    }
-    bpf_spin_lock(&xlock->lock);
     sentinfo.update(&sentkey, &si);
-    bpf_spin_unlock(&xlock->lock);
 
 #if DEBUG
     bpf_trace_printk("EGRESS icmp4 emitting probe %lu\n", sequence);
@@ -1399,9 +1385,8 @@ int ingress_v4(struct xdp_md *ctx) {
 #endif
 
     // record received probe
-    u64 reskey = RESULTS_IDX;
     u64 zero = 0ULL;
-    u64 *resultsidx = counters.lookup_or_init(&reskey, &zero);
+    int *resultsidx = resultscount.lookup(&zero);
     if (resultsidx == NULL) {
 #if DEBUG
         bpf_trace_printk("INGRESS ip4 failed to get results idx\n");
@@ -1412,6 +1397,8 @@ int ingress_v4(struct xdp_md *ctx) {
     bpf_trace_printk("INGRESS ip4 got results index %llu\n", *resultsidx);
 #endif
     int new_results = (int)*resultsidx;
+    lock_xadd(resultsidx, 1);
+
     new_results = new_results % MAXRESULTS;
     struct latency_sample *latsamp = results.lookup(&new_results);
     if (latsamp == NULL) {
@@ -1421,7 +1408,6 @@ int ingress_v4(struct xdp_md *ctx) {
     bpf_trace_printk("INGRESS ip4 rdata got lat sample ptr proto %d seq %d rttl %d\n", iph->protocol, seq, recvttl);
     bpf_trace_printk("INGRESS ip4 rdata sport %d dport %d inipid %x\n", sport, dport, inipid);
 #endif
-    counters.increment(RESULTS_IDX);
     latsamp->sequence = seq;
     latsamp->recv = bpf_ktime_get_ns();
     latsamp->recvttl = recvttl;
@@ -1574,9 +1560,8 @@ int ingress_v6(struct xdp_md *ctx) {
 #endif
 
     // record received probe
-    u64 reskey = RESULTS_IDX;
     u64 zero = 0ULL;
-    u64 *resultsidx = counters.lookup_or_init(&reskey, &zero);
+    int *resultsidx = resultscount.lookup(&zero);
     if (resultsidx == NULL) {
 #if DEBUG
         bpf_trace_printk("INGRESS ip6 failed to get results idx\n");
@@ -1584,6 +1569,7 @@ int ingress_v6(struct xdp_md *ctx) {
         return INGRESS_ACTION;
     }
     int new_results = (int)*resultsidx;
+    lock_xadd(resultsidx, 1);
 #if DEBUG
     bpf_trace_printk("INGRESS ip6 got results index %llu\n", new_results);
 #endif
@@ -1608,7 +1594,6 @@ int ingress_v6(struct xdp_md *ctx) {
         latsamp->responder._u._addr32[i] = bpf_htonl(source._u._addr32[i]);
         latsamp->target._u._addr32[i] = bpf_htonl(origdst._u._addr32[i]);
     }
-    counters.increment(RESULTS_IDX);
 
     u64 sentkey = (u64)*val << 32 | (u64)seq;
     struct sent_info *si = sentinfo.lookup(&sentkey);
