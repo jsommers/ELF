@@ -1,8 +1,6 @@
 # fixme list
 
  - option not to probe certain hops (change permanent mask for a dest)
- - modify probe rate/interval so per-hop probing is a roughly constant
-   rate
  - better handling of non-responsive hops
  - name
    bandaid

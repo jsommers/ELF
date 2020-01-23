@@ -1657,21 +1657,3 @@ int ingress_v6(struct xdp_md *ctx) {
 
     return INGRESS_ACTION;
 }
-
-/*
- * u32 bpf_get_smp_processor_id(void)
- * BPF_PERCPU_ARRAY(name, leaftype, size)
- *
- * lock_xadd(&dst_host->tx_pkts, 1); in 
- *   https://github.com/iovisor/bcc/blob/82f4302a651a6b46b0b090733d34af8201ecacb5/examples/networking/distributed_bridge/tunnel.c
- *
- * int bpf_spin_lock(struct bpf_spin_lock *lock)
- *
- * bpf_spin_lock objects are only allowed inside maps of
- * types BPF_MAP_TYPE_HASH and BPF_MAP_TYPE_ARRAY (this
- * list could be extended in the future).
- *
- * The BPF_LD_ABS and BPF_LD_IND instructions are not
- * allowed inside a spinlock-ed region.
- *
- */
