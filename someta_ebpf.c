@@ -191,7 +191,6 @@ BPF_PERCPU_ARRAY(resultscount, int, 1);
 
 static inline void _update_maxttl(int idx, int ttl) {
     struct probe_dest *pd = destinfo.lookup(&idx);
-
     if (pd == NULL) {
         return;
     }
@@ -247,8 +246,11 @@ static inline int _should_probe_dest(int idx) {
         return FALSE;
     }
 
+    // NB: MIN_PROBE is in nanoseconds
+    u64 perhop_probe = MIN_PROBE / (u64)pd->maxttl;
+
     u64 now = bpf_ktime_get_ns();
-    if ((now - pd->last_send) > MIN_PROBE) {
+    if ((now - pd->last_send) > perhop_probe) {
         pd->last_send = now; // update here, when checking
                              // to avoid race between check and later 
                              // clone, etc. and update
@@ -972,10 +974,9 @@ int egress_v6_tcp(struct __sk_buff *ctx) {
     newtcp.th_flags = TH_ACK;
 
     // get current header value
-    u16 curr_ip_len = load_half(ctx, NHOFFSET + IP6_LEN_OFF);
     u16 new_ip_len = sizeof(struct _tcphdr);
-
 #if DEBUG
+    u16 curr_ip_len = load_half(ctx, NHOFFSET + IP6_LEN_OFF);
     bpf_trace_printk("EGRESS tcp6 truncating pkt from %d to %d\n", curr_ip_len, new_ip_len);
 #endif
 
@@ -1142,10 +1143,9 @@ int egress_v6_udp(struct __sk_buff *ctx) {
     };
 
     // get current header value
-    u16 curr_ip_len = load_half(ctx, NHOFFSET + IP6_LEN_OFF);
     u16 new_ip_len = sizeof(struct _udphdr) + 12;
-
 #if DEBUG
+    u16 curr_ip_len = load_half(ctx, NHOFFSET + IP6_LEN_OFF);
     bpf_trace_printk("EGRESS udp6 truncating pkt from %d to %d\n", curr_ip_len, new_ip_len);
 #endif
 
@@ -1367,7 +1367,6 @@ int ingress_v4(struct xdp_md *ctx) {
 
     offset = offset + sizeof(struct _icmphdr);
     // save srcip and ttl from outer IP header
-    uint32_t srcip = iph->saddr;
     uint8_t recvttl = iph->ttl;
     if (data + offset + sizeof(struct _iphdr) > data_end) {
         return INGRESS_ACTION;
@@ -1386,6 +1385,7 @@ int ingress_v4(struct xdp_md *ctx) {
     u16 inipid = bpf_ntohs(iph->id);
 
 #if DEBUG
+    uint32_t srcip = iph->saddr;
     bpf_trace_printk("INGRESS ip4 ttl exc from 0x%x rttl %d idx %d\n", srcip, recvttl, *val);
 #endif
 
@@ -1412,7 +1412,7 @@ int ingress_v4(struct xdp_md *ctx) {
 #endif
 
     // record received probe
-    u64 zero = 0ULL;
+    int zero = 0;
     int *resultsidx = resultscount.lookup(&zero);
     if (resultsidx == NULL) {
 #if DEBUG
@@ -1533,7 +1533,6 @@ int ingress_v6(struct xdp_md *ctx) {
         inner_pktlen = sizeof(struct _ip6hdr) + 8;
     }
 
-    int outerlen = bpf_ntohs(iph->payload_length);
     offset = offset + sizeof(struct _icmphdr);
 
     uint8_t recvttl = iph->hop_limit;
@@ -1541,6 +1540,7 @@ int ingress_v6(struct xdp_md *ctx) {
         return INGRESS_ACTION;
     }
 #ifdef DEBUG
+    int outerlen = bpf_ntohs(iph->payload_length);
     bpf_trace_printk("INGRESS ip6 time exceeded from dest of interest, len %d\n", outerlen);
 #endif
     // the *inner* v6 header returned by some router where the packet died
@@ -1587,7 +1587,7 @@ int ingress_v6(struct xdp_md *ctx) {
 #endif
 
     // record received probe
-    u64 zero = 0ULL;
+    int zero = 0;
     int *resultsidx = resultscount.lookup(&zero);
     if (resultsidx == NULL) {
 #if DEBUG

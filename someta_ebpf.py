@@ -338,7 +338,7 @@ if __name__ == '__main__':
     parser.add_argument('-l', '--logfile', default=False, action='store_true', help='Turn on logfile output')
     parser.add_argument('-f', '--filebase', default='ebpf_probe', help='Configure base name for log and data output files')
     parser.add_argument('-d', '--debug', default=False, action='store_true', help='Turn on debug logging')
-    parser.add_argument('-p', '--probeint', default=1, type=int, help='Minimum probe interval (milliseconds)')
+    parser.add_argument('-p', '--probeint', default=10, type=int, help='Minimum probe interval (milliseconds) per hop')
     parser.add_argument('-i', '--interface', required=True, type=str, help='Interface/device to use')
     parser.add_argument('-e', '--encapsulation', choices=('ethernet', 'ipinip', 'ip6inip'), default='ethernet', help='How packets are encapsulated on the wire')
     parser.add_argument('addresses', metavar='addresses', nargs='*', type=str, help='IP addresses of interest')
