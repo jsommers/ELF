@@ -592,6 +592,10 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     u16 outipid = load_half(ctx, NHOFFSET + IP_ID_OFF);
     _decide_seq_ttl(pd, &sequence, &newttl);
 
+    u64 cksum64 = bpf_csum_diff(0, 0, data + NHOFFSET + IP_SRC_OFF, sizeof(u32)*2, 0);
+    u32 tmp = bpf_htonl(((u32)IPPROTO_UDP << 16) | 20);
+    cksum64 = bpf_csum_diff(0, 0, &tmp, sizeof(tmp), cksum64);
+
     u32 srcaddr = bpf_ntohl(load_word(ctx, NHOFFSET + IP_SRC_OFF));
     u32 csum = bpf_ntohl(destaddr);
     csum = (csum & 0xffff) + (csum >> 16);
@@ -599,7 +603,7 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     csum += (srcaddr >> 16);
     csum += (u16)bpf_htons(20);
     csum += (u16)bpf_htons(IPPROTO_UDP);
-    
+
 #if DEBUG
     bpf_trace_printk("EGRESS udp4 outgoing seq %lu origseq 0x%x\n", sequence, origseq);
 #endif
@@ -632,7 +636,7 @@ int egress_v4_udp(struct __sk_buff *ctx) {
         .uh_sport = bpf_htons(sport),
         .uh_dport = bpf_htons(dport),
         .uh_ulen = bpf_htons(20),
-        .uh_sum = bpf_htons(sequence),
+        .uh_sum = 0,
     };
 
     // get current header value
@@ -664,6 +668,14 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     if (rv < 0) {
 #if DEBUG
         bpf_trace_printk("EGRESS udp4 bpf store payload failed\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+
+    rv = bpf_l4_csum_replace(ctx, NHOFFSET + iphlen + UDP_CSUM_OFF, 0, cksum64, BPF_F_PSEUDO_HDR);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS udp4 bpf store udp sum failed\n");
 #endif
         return TC_ACT_SHOT;
     }
