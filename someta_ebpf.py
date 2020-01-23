@@ -8,6 +8,7 @@ from contextlib import contextmanager
 import ctypes
 import ipaddress
 import logging
+import multiprocessing
 import socket
 import sys
 import time
@@ -19,6 +20,7 @@ import pyroute2
 # constants that mirror bpf C
 RESULTS_IDX = 256
 MAX_RESULTS = 16384
+CPU_COUNT = multiprocessing.cpu_count()
 
 class _u(ctypes.Union):
     _fields_ = [
@@ -213,7 +215,7 @@ def _write_results(b, rcounts, metadata, config, dumpall=False):
     xcount = 0
     rc  = b['resultscount'][0]
     results = b['results']
-    for cpu in range(len(rcounts)):
+    for cpu in range(CPU_COUNT):
         if rc[cpu] > rcounts[cpu] and config.debug:
             logging.debug("Got {} results on cpu {}".format(rcounts[cpu] - rc[cpu], cpu))
         while rcounts[cpu] < rc[cpu]:
@@ -299,7 +301,7 @@ def main(config):
 
         logging.info("start")
         rc = 0
-        resultcounts = [0]*48 # FIXME: number of cpus
+        resultcounts = [0]*CPU_COUNT
         while True:
             try:
                 time.sleep(1)
