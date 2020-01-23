@@ -932,9 +932,9 @@ int egress_v6_tcp(struct __sk_buff *ctx) {
     _in6_addr_t destaddr;
     // compute checksum pseudoheader value
     u64 cksum64 = bpf_csum_diff(0, 0, data + NHOFFSET + IP6_SRC_OFF, sizeof(_in6_addr_t) * 2, 0);
-    u32 tmp = bpf_htonl(20);
+    u32 tmp = bpf_htonl(20); // tcp hdr size
     cksum64 = bpf_csum_diff(0, 0, &tmp, sizeof(tmp), cksum64);
-    tmp = bpf_htonl(6);
+    tmp = bpf_htonl(IPPROTO_TCP);
     cksum64 = bpf_csum_diff(0, 0, &tmp, sizeof(tmp), cksum64);
 
 #pragma unroll
@@ -1074,6 +1074,13 @@ int egress_v6_udp(struct __sk_buff *ctx) {
     u16 sequence = 0;
     u8 newttl = 0;
     _in6_addr_t destaddr;
+
+    // compute checksum pseudoheader value
+    u64 cksum64 = bpf_csum_diff(0, 0, data + NHOFFSET + IP6_SRC_OFF, sizeof(_in6_addr_t) * 2, 0);
+    u32 tmp = bpf_htonl(20); // udp hdr + payload 
+    cksum64 = bpf_csum_diff(0, 0, &tmp, sizeof(tmp), cksum64);
+    tmp = bpf_htonl(IPPROTO_UDP);
+    cksum64 = bpf_csum_diff(0, 0, &tmp, sizeof(tmp), cksum64);
     
     u32 csum = 0;
 #pragma unroll
@@ -1119,7 +1126,7 @@ int egress_v6_udp(struct __sk_buff *ctx) {
 
     csum += bpf_htons(sport);
     csum += bpf_htons(dport);
-    csum += bpf_htons(20);
+    csum += bpf_htons(20); // udp hdr + payload
     csum += bpf_htons(sequence);
     csum = (csum >> 16) + (csum & 0xffff);
     csum += (csum >> 16);
@@ -1131,7 +1138,7 @@ int egress_v6_udp(struct __sk_buff *ctx) {
         .uh_sport = bpf_htons(sport),
         .uh_dport = bpf_htons(dport),
         .uh_ulen = bpf_htons(20),
-        .uh_sum = bpf_htons(sequence),
+        .uh_sum = 0,
     };
 
     // get current header value
@@ -1163,6 +1170,14 @@ int egress_v6_udp(struct __sk_buff *ctx) {
     if (rv < 0) {
 #if DEBUG
         bpf_trace_printk("EGRESS udp6 bpf store payload failed\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+
+    rv = bpf_l4_csum_replace(ctx, NHOFFSET + sizeof(struct _ip6hdr) + UDP_CSUM_OFF, 0, cksum64, BPF_F_PSEUDO_HDR);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS tcp6 failed to store checksum \n");
 #endif
         return TC_ACT_SHOT;
     }
