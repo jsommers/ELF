@@ -3,12 +3,12 @@
 from __future__ import print_function
 
 import argparse
-import json
 from contextlib import contextmanager
 import ctypes
 import ipaddress
+import json
 import logging
-import multiprocessing
+import os
 import socket
 import sys
 import time
@@ -20,7 +20,7 @@ import pyroute2
 # constants that mirror bpf C
 RESULTS_IDX = 256
 MAX_RESULTS = 16384
-CPU_COUNT = multiprocessing.cpu_count()
+CPU_COUNT = os.cpu_count()
 
 class _u(ctypes.Union):
     _fields_ = [
