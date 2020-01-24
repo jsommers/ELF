@@ -142,7 +142,7 @@ struct probe_dest {
     u16         sequence;
     u16         next_hop_to_probe;
     u16         maxttl;
-    u16         pad;
+    u16         num_masked;
     u64         last_send;
     u64         last_mttl_update;
     _in6_addr_t dest;
@@ -223,14 +223,20 @@ static inline void _decide_seq_ttl(struct probe_dest *pd, u16 *seq, u8 *ttl) {
     }
     *seq = pd->sequence;
     pd->sequence++;
+    u32 mask = pd->hop_mask;
     u32 bitmap = pd->hop_bitmap;
     bpf_trace_printk("EGRESS decide_seq_ttl bitmap 0x%x seq %d\n", bitmap, *seq);
-    
+
 #pragma unroll
     for (u16 i = 0; i < 8; i++) {
         u16 hop = (pd->next_hop_to_probe + i) % pd->maxttl;
-        if (*seq < (pd->maxttl*3) || 
-            ((bitmap >> hop) & 0x1) == 0x1) {
+        if (!((mask >> hop) & 0x1) &&
+            // if we should probe the hop (mask is not set)
+            // and either we haven't probed for about a sec for
+            // a given hop, or we've received responses from
+            // that hop ...
+            ((*seq < (pd->maxttl*(1000000000ULL/MIN_PROBE))) || 
+             ((bitmap >> hop) & 0x1) == 0x1)) {
             *ttl = (u8)(hop + 1);
             pd->next_hop_to_probe = (hop + 1) % pd->maxttl;
             return;
@@ -247,7 +253,7 @@ static inline int _should_probe_dest(int idx) {
     }
 
     // NB: MIN_PROBE is in nanoseconds
-    u64 perhop_probe = MIN_PROBE / (u64)pd->maxttl;
+    u64 perhop_probe = MIN_PROBE / (u64)(pd->maxttl - pd->num_masked);
 
     u64 now = bpf_ktime_get_ns();
     if ((now - pd->last_send) > perhop_probe) {

@@ -50,7 +50,7 @@ def to_ipaddr(obj):
             i = i << 32 | obj._u._addr32[j]
         return ipaddress.IPv6Address(i)
 
-def new_address_of_interest(table, a, dinfo):
+def new_address_of_interest(table, a, dinfo, hop_bitmap, hops_excluded):
     '''
     (bpftable, ipaddr, bpftable) -> None
     Add a new address of interest to bpf tables
@@ -70,6 +70,8 @@ def new_address_of_interest(table, a, dinfo):
     table[xaddr] = ctypes.c_uint64(idx)
     dinfo[idx].hop_bitmap = 0
     dinfo[idx].max_ttl = 16
+    dinfo[idx].hop_mask = hop_bitmap
+    dinfo[idx].num_masked = hops_excluded
 
 def _set_bpf_jumptable(bpf, tablename, idx, fnname, progtype):
     '''
@@ -85,6 +87,13 @@ def _set_bpf_jumptable(bpf, tablename, idx, fnname, progtype):
 class RunState(object):
     def __init__(self, args):
         self._args = args
+        self._exclude_bitmap = 0x00000000
+        self._hops_excluded = 0
+        for b in set(self._args.exclude):
+            # bit position k -> hop k+1
+            bit = 1 << (b-1)
+            self._exclude_bitmap |= bit
+            self._hops_excluded += 1
     
     def setup(self):
         '''
@@ -166,8 +175,8 @@ class RunState(object):
         self._open_pyroute2()
         self._build_bpf_cflags()
         b = BPF(src_file='someta_ebpf.c', debug=self._bcc_debugflag, cflags=self._cflags)
-
         self._register_addresses_of_interest(b, metadata)
+
         b['counters'][ctypes.c_int(RESULTS_IDX)] = ctypes.c_int(0)
 
         egress_fn = b.load_func('egress_path', BPF.SCHED_CLS)
@@ -209,7 +218,7 @@ class RunState(object):
             for family,_,_,_,sockaddr in socket.getaddrinfo(name, None):
                 addr = sockaddr[0]
                 metadata['hosts'][addr] = name
-                new_address_of_interest(b['trie'], addr, destinfo)
+                new_address_of_interest(b['trie'], addr, destinfo, self._exclude_bitmap, self._hops_excluded)
 
 def _write_results(b, rcounts, metadata, config, dumpall=False):
     xcount = 0
@@ -327,10 +336,15 @@ def main(config):
         json.dump(metadata, outfile)
 
 
-def sanitychecks(args):
+def arg_sanity_checks(args):
     if args.probeint < 0 or args.probeint > 1000:
         print("Invalid probe interval (0-1000 is allowed)")
         sys.exit()
+    print(args.exclude)
+    for val in args.exclude:
+        if val < 1 or val > 32:
+            print("Invalid exclude hop {}".format(val))
+            sys.exit()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -341,7 +355,8 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--probeint', default=10, type=int, help='Minimum probe interval (milliseconds) per hop')
     parser.add_argument('-i', '--interface', required=True, type=str, help='Interface/device to use')
     parser.add_argument('-e', '--encapsulation', choices=('ethernet', 'ipinip', 'ip6inip'), default='ethernet', help='How packets are encapsulated on the wire')
+    parser.add_argument('-x', '--exclude', type=int, action='append', help='Identify which hops should be *excluded* from probing, globally')
     parser.add_argument('addresses', metavar='addresses', nargs='*', type=str, help='IP addresses of interest')
     args = parser.parse_args()
-    sanitychecks(args)
+    arg_sanity_checks(args)
     main(args)

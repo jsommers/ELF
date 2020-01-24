@@ -1,7 +1,5 @@
 # fixme list
 
- - option not to probe certain hops (change permanent mask for a dest)
- - better handling of non-responsive hops
  - name
    bandaid
    bpfinjector
