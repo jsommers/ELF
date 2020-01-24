@@ -50,7 +50,7 @@ def to_ipaddr(obj):
             i = i << 32 | obj._u._addr32[j]
         return ipaddress.IPv6Address(i)
 
-def new_address_of_interest(table, a, dinfo, hop_mask, num_masked):
+def new_address_of_interest(table, a, dinfo):
     '''
     (bpftable, ipaddr, bpftable) -> None
     Add a new address of interest to bpf tables
@@ -68,10 +68,6 @@ def new_address_of_interest(table, a, dinfo, hop_mask, num_masked):
             xaddr._u._addr8[i] = 0
             dinfo[idx].dest._u._addr8[i] = 0
     table[xaddr] = ctypes.c_uint64(idx)
-    dinfo[idx].hop_bitmap = ctypes.c_uint32(0)
-    dinfo[idx].max_ttl = ctypes.c_uint16(16)
-    dinfo[idx].hop_mask = ctypes.c_uint32(hop_mask)
-    dinfo[idx].num_masked = ctypes.c_uint16(num_masked)
 
 def _set_bpf_jumptable(bpf, tablename, idx, fnname, progtype):
     '''
@@ -87,13 +83,6 @@ def _set_bpf_jumptable(bpf, tablename, idx, fnname, progtype):
 class RunState(object):
     def __init__(self, args):
         self._args = args
-        self._exclude_bitmap = 0x00000000
-        self._hops_excluded = 0
-        for b in set(self._args.exclude):
-            # bit position k -> hop k+1
-            bit = 1 << (b-1)
-            self._exclude_bitmap |= bit
-            self._hops_excluded += 1
     
     def setup(self):
         '''
@@ -218,7 +207,7 @@ class RunState(object):
             for family,_,_,_,sockaddr in socket.getaddrinfo(name, None):
                 addr = sockaddr[0]
                 metadata['hosts'][addr] = name
-                new_address_of_interest(b['trie'], addr, destinfo, self._exclude_bitmap, self._hops_excluded)
+                new_address_of_interest(b['trie'], addr, destinfo)
 
 def _write_results(b, rcounts, metadata, config, dumpall=False):
     xcount = 0
@@ -226,7 +215,7 @@ def _write_results(b, rcounts, metadata, config, dumpall=False):
     results = b['results']
     for cpu in range(CPU_COUNT):
         if rc[cpu] > rcounts[cpu] and config.debug:
-            logging.debug("Got {} results on cpu {}".format(rcounts[cpu] - rc[cpu], cpu))
+            logging.debug("Got {} results on cpu {}".format(rc[cpu] - rcounts[cpu], cpu))
         while rcounts[cpu] < rc[cpu]:
             resultidx = rcounts[cpu] % MAX_RESULTS
             res = results[resultidx][cpu]
@@ -236,16 +225,6 @@ def _write_results(b, rcounts, metadata, config, dumpall=False):
                 print("latsamp", cpu, resultidx, res.sequence, res.origseq, res.recv-res.send, res.send, res.recv, res.sport, res.dport, res.outttl, res.recvttl, to_ipaddr(res.responder), to_ipaddr(res.target), res.protocol, res.outipid, res.inipid)
             d = {'recvcpu':cpu, 'seq':res.sequence, 'origseq':res.origseq, 'latency':(res.recv-res.send), 'sendtime':res.send, 'recvtime':res.recv, 'dest':str(to_ipaddr(res.target)), 'responder':str(to_ipaddr(res.responder)), 'outttl':res.outttl, 'recvttl':res.recvttl, 'sport':res.sport, 'dport':res.dport, 'protocol':res.protocol, 'outipid':res.outipid, 'inipid':res.inipid}
             metadata['results'].append(d)
-
-#    rc = b['counters'][ctypes.c_int(RESULTS_IDX)]
-#    while rcount < rc.value:
-#        resultidx = rcount % MAX_RESULTS
-#        res = b['results'][resultidx]
-#        if config.debug:
-#            print("latsamp", resultidx, res.sequence, res.origseq, res.recv-res.send, res.send, res.recv, res.sport, res.dport, res.outttl, res.recvttl, to_ipaddr(res.responder), to_ipaddr(res.target), res.protocol, res.outipid, res.inipid)
-#        d = {'seq':res.sequence, 'origseq':res.origseq, 'latency':(res.recv-res.send), 'sendtime':res.send, 'recvtime':res.recv, 'dest':str(to_ipaddr(res.target)), 'responder':str(to_ipaddr(res.responder)), 'outttl':res.outttl, 'recvttl':res.recvttl, 'sport':res.sport, 'dport':res.dport, 'protocol':res.protocol, 'outipid':res.outipid, 'inipid':res.inipid}
-#        metadata['results'].append(d)
-#        rcount += 1
 
     if dumpall:
         for k,v in b['sentinfo'].items():
@@ -340,10 +319,6 @@ def arg_sanity_checks(args):
     if args.probeint < 0 or args.probeint > 1000:
         print("Invalid probe interval (0-1000 is allowed)")
         sys.exit()
-    for val in args.exclude:
-        if val < 1 or val > 32:
-            print("Invalid exclude hop {}".format(val))
-            sys.exit()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -354,7 +329,6 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--probeint', default=10, type=int, help='Minimum probe interval (milliseconds) per hop')
     parser.add_argument('-i', '--interface', required=True, type=str, help='Interface/device to use')
     parser.add_argument('-e', '--encapsulation', choices=('ethernet', 'ipinip', 'ip6inip'), default='ethernet', help='How packets are encapsulated on the wire')
-    parser.add_argument('-x', '--exclude', type=int, action='append', help='Identify which hops should be *excluded* from probing, globally')
     parser.add_argument('addresses', metavar='addresses', nargs='*', type=str, help='IP addresses of interest')
     args = parser.parse_args()
     arg_sanity_checks(args)
