@@ -225,7 +225,7 @@ static inline void _decide_seq_ttl(struct probe_dest *pd, u16 *seq, u8 *ttl) {
     pd->sequence++;
     u32 mask = pd->hop_mask;
     u32 bitmap = pd->hop_bitmap;
-    bpf_trace_printk("EGRESS decide_seq_ttl bitmap 0x%x seq %d\n", bitmap, *seq);
+    bpf_trace_printk("EGRESS decide_seq_ttl bitmap 0x%x mask 0x%x seq %d\n", bitmap, mask, *seq);
 
 #pragma unroll
     for (u16 i = 0; i < 8; i++) {

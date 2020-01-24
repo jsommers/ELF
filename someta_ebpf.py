@@ -50,7 +50,7 @@ def to_ipaddr(obj):
             i = i << 32 | obj._u._addr32[j]
         return ipaddress.IPv6Address(i)
 
-def new_address_of_interest(table, a, dinfo, hop_bitmap, hops_excluded):
+def new_address_of_interest(table, a, dinfo, hop_mask, num_masked):
     '''
     (bpftable, ipaddr, bpftable) -> None
     Add a new address of interest to bpf tables
@@ -68,10 +68,10 @@ def new_address_of_interest(table, a, dinfo, hop_bitmap, hops_excluded):
             xaddr._u._addr8[i] = 0
             dinfo[idx].dest._u._addr8[i] = 0
     table[xaddr] = ctypes.c_uint64(idx)
-    dinfo[idx].hop_bitmap = 0
-    dinfo[idx].max_ttl = 16
-    dinfo[idx].hop_mask = hop_bitmap
-    dinfo[idx].num_masked = hops_excluded
+    dinfo[idx].hop_bitmap = ctypes.c_uint32(0)
+    dinfo[idx].max_ttl = ctypes.c_uint16(16)
+    dinfo[idx].hop_mask = ctypes.c_uint32(hop_mask)
+    dinfo[idx].num_masked = ctypes.c_uint16(num_masked)
 
 def _set_bpf_jumptable(bpf, tablename, idx, fnname, progtype):
     '''
@@ -340,7 +340,6 @@ def arg_sanity_checks(args):
     if args.probeint < 0 or args.probeint > 1000:
         print("Invalid probe interval (0-1000 is allowed)")
         sys.exit()
-    print(args.exclude)
     for val in args.exclude:
         if val < 1 or val > 32:
             print("Invalid exclude hop {}".format(val))
