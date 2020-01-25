@@ -231,7 +231,7 @@ static inline void _decide_seq_ttl(struct probe_dest *pd, u16 *seq, u8 *ttl) {
         u16 hop = (pd->next_hop_to_probe + i) % mttl;
         // select a hop if we've only probed for about 2 sec or if the
         // hop has been  responsive to prior probes
-        if ((*seq < ((pd->maxttl-1)*(2000000000ULL/MIN_PROBE))) || 
+        if ((*seq < ((pd->maxttl-1)*(2000000000ULL/PROBE_INT))) || 
             ((bitmap >> hop) & 0x1) == 0x1) {
             *ttl = (u8)(hop + 1);
             pd->next_hop_to_probe = (hop + 1) % mttl;
@@ -252,11 +252,15 @@ static inline int _should_probe_dest(int idx) {
         return FALSE;
     }
 
-    // NB: MIN_PROBE is in nanoseconds
-    u64 perhop_probe = MIN_PROBE / (u64)(pd->maxttl - 1);
+    // NB: PROBE_INT is in nanoseconds
+#if PERHOPRATE
+    u64 probe_int = PROBE_INT / (u64)(pd->maxttl - 1);
+#else
+    u64 probe_int = PROBE_INT;
+#endif
 
     u64 now = bpf_ktime_get_ns();
-    if ((now - pd->last_send) > perhop_probe) {
+    if ((now - pd->last_send) > probe_int) {
         pd->last_send = now; 
         return TRUE;
     }

@@ -10,9 +10,10 @@ df = pd.read_json(json.dumps(d['results']))
 nolat = len(df[df['latency'] == -1])
 print("No-latency rows: ", nolat, len(df), nolat/len(df), end="\n\n")
 df = df[df['latency'] != -1]
+df = df.sort_values(by='sendtime') # , axis=1)
 print("recvttl value counts:", df['recvttl'].value_counts(), end="\n\n")
 print("outttl value counts:", df['outttl'].value_counts(), end="\n\n")
-cols = ['seq','latency','outttl','recvttl','protocol']
+cols = ['seq','sendtime','latency','outttl','recvttl','protocol']
 print()
 print(df.head(10).to_string(columns=cols))
 print()

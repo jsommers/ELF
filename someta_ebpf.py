@@ -132,7 +132,9 @@ class RunState(object):
         NB: this must be done *after* open ipdb, since we get the 
         interface index from pyroute2.
         '''
-        cflags = ['-Wall', '-DMIN_PROBE={}'.format(1000000 * self._args.probeint)] # 1 millisec default
+        cflags = ['-Wall', '-DPROBE_INT={}'.format(1000000 * self._args.probeint)] # 1 millisec default
+        if self._args.ratetype in ['h','perhop']:
+            cflags.append('-DPERHOPRATE=1')
         cflags.append('-DIFINDEX={}'.format(self._idx))
         if self._args.encapsulation == 'ipinip':
             cflags.append('-DTUNNEL=4')
@@ -326,7 +328,8 @@ if __name__ == '__main__':
     parser.add_argument('-l', '--logfile', default=False, action='store_true', help='Turn on logfile output')
     parser.add_argument('-f', '--filebase', default='ebpf_probe', help='Configure base name for log and data output files')
     parser.add_argument('-d', '--debug', default=False, action='store_true', help='Turn on debug logging')
-    parser.add_argument('-p', '--probeint', default=10, type=int, help='Minimum probe interval (milliseconds) per hop')
+    parser.add_argument('-p', '--probeint', default=10, type=int, help='Minimum probe interval (milliseconds)')
+    parser.add_argument('-r', '--ratetype', choices=('g','global','h','perhop'), help='Probe rate type: global or per hop; default is per hop => longer path for per-hop type implies higher measurement probe rate')
     parser.add_argument('-i', '--interface', required=True, type=str, help='Interface/device to use')
     parser.add_argument('-e', '--encapsulation', choices=('ethernet', 'ipinip', 'ip6inip'), default='ethernet', help='How packets are encapsulated on the wire')
     parser.add_argument('addresses', metavar='addresses', nargs='*', type=str, help='IP addresses of interest')
