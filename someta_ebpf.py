@@ -153,7 +153,7 @@ class RunState(object):
         self._bcc_debugflag = bcc.DEBUG_SOURCE
         if self._args.debug:
             cflags.append('-DDEBUG=1')
-            bcc_debugflag = bcc.DEBUG_BPF_REGISTER_STATE | bcc.DEBUG_SOURCE | bcc.DEBUG_BPF | bcc.DEBUG_LLVM_IR | bcc.DEBUG_BTF
+            bcc_debugflag = bcc.DEBUG_BPF_REGISTER_STATE | bcc.DEBUG_SOURCE | bcc.DEBUG_BPF | bcc.DEBUG_LLVM_IR 
 
         self._cflags = cflags
 
