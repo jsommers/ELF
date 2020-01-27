@@ -69,7 +69,17 @@ def doplot(df, outname, cols=2, xlim=None, ylim=None, smooth=''):
     plt.legend(ncol=cols, loc='upper left', fontsize=8)
     plt.savefig('{}.pdf'.format(outname), layout='tight')
 
+
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--hop', '-h', nargs='+', type=int, action='append', help='Indicate which hops should be plotted (default: all)')
+    parser.add_argument('--smooth', '-s', choices=('none','ewma','window'), help='Indicate how latency measurements should be smoothed for plotting')
+    parser.add_argument('--print', '-p', nargs='+', type=int, action='append', help='Indicate sequence numbers for which detail should be printed')
+    parser.add_argument('--head', type=int, help='Indicate the number of rows to be printed from latency measurements')
+    parser.add_argument('--xlim', '-x')
+    parser.add_argument('--ylim', '-y')
+    parser.add_argument('inputfiles', metavar='inputfiles', nargs='+', type=str,
+            help='Data files')
     with open(sys.argv[1]) as infile:
         d = json.load(infile)
     main(d)

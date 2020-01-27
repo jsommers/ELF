@@ -4,9 +4,9 @@ from __future__ import print_function
 
 import argparse
 from contextlib import contextmanager
+import csv
 import ctypes
 import ipaddress
-import json
 import logging
 import os
 import socket
@@ -158,7 +158,7 @@ class RunState(object):
         self._cflags = cflags
 
     @contextmanager
-    def open_ebpf(self, metadata):
+    def open_ebpf(self):
         '''
         context manager that opens and configures BCC ebpf object, and closes/releases
         ebpf + ipdb resources when done
@@ -166,7 +166,7 @@ class RunState(object):
         self._open_pyroute2()
         self._build_bpf_cflags()
         b = BPF(src_file='someta_ebpf.c', debug=self._bcc_debugflag, cflags=self._cflags)
-        self._register_addresses_of_interest(b, metadata)
+        self._register_addresses_of_interest(b)
 
         b['counters'][ctypes.c_int(RESULTS_IDX)] = ctypes.c_int(0)
 
@@ -198,9 +198,9 @@ class RunState(object):
             self._ip.tc('del', 'clsact', self._idx)
             self._ipdb.release()
 
-    def _register_addresses_of_interest(self, b, metadata):
+    def _register_addresses_of_interest(self, b):
         '''
-        (bpf, metadatadict) -> None
+        (bpf) -> None
         add IP addresses corresponding to all DNS names given on command line to
         internal address hash.
         '''
@@ -208,10 +208,10 @@ class RunState(object):
         for name in self._args.addresses:
             for family,_,_,_,sockaddr in socket.getaddrinfo(name, None):
                 addr = sockaddr[0]
-                metadata['hosts'][addr] = name
+                logging.info("host of interest: address {} name {}".format(addr, name))
                 new_address_of_interest(b['trie'], addr, destinfo)
 
-def _write_results(b, rcounts, metadata, config, dumpall=False):
+def _write_results(b, rcounts, csvout, config, dumpall=False):
     xcount = 0
     rc  = b['resultscount'][0]
     results = b['results']
@@ -225,17 +225,14 @@ def _write_results(b, rcounts, metadata, config, dumpall=False):
             xcount += 1
             if config.debug:
                 print("latsamp", cpu, resultidx, res.sequence, res.origseq, res.recv-res.send, res.send, res.recv, res.sport, res.dport, res.outttl, res.recvttl, to_ipaddr(res.responder), to_ipaddr(res.target), res.protocol, res.outipid, res.inipid)
-            d = {'recvcpu':cpu, 'seq':res.sequence, 'origseq':res.origseq, 'latency':(res.recv-res.send), 'sendtime':res.send, 'recvtime':res.recv, 'dest':str(to_ipaddr(res.target)), 'responder':str(to_ipaddr(res.responder)), 'outttl':res.outttl, 'recvttl':res.recvttl, 'sport':res.sport, 'dport':res.dport, 'protocol':res.protocol, 'outipid':res.outipid, 'inipid':res.inipid}
-            metadata['results'].append(d)
-
+            csvout.writerow([cpu, res.sequence, res.origseq, (res.recv-res.send), res.send, res.recv, str(to_ipaddr(res.target)), str(to_ipaddr(res.responder)), res.outttl, res.recvttl, res.sport, res.dport, res.protocol, res.outipid, res.inipid])
     if dumpall:
         for k,v in b['sentinfo'].items():
             idx = k.value >> 32 & 0xffffffff
             seq = k.value & 0xffffffff
             if config.debug:
                 print("sent", idx, seq, v.origseq, v.send_time, to_ipaddr(v.dest), v.outttl, v.sport, v.dport, v.protocol, v.outipid)
-            d = {'seq':seq, 'origseq':v.origseq, 'sendtime':v.send_time, 'dest':str(to_ipaddr(v.dest)), 'outttl':v.outttl, 'sport':v.sport, 'dport':v.dport, 'recvtime':0, 'responder':'', 'recvttl':-1, 'latency':-1, 'protocol':v.protocol, 'outipid':v.outipid}
-            metadata['results'].append(d)
+            csvout.writerow([0, seq, v.origseq, -1, v.send_time, -1, str(to_ipaddr(v.dest)), '', v.outttl, -1, v.sport, v.dport, v.protocol, v.outipid, -1])
             xcount += 1
 
     return xcount
@@ -280,41 +277,36 @@ def main(config):
     state = RunState(config)
     state.setup()
 
-    metadata = {}
-    metadata['timestamp'] = time.asctime()
-    metadata['interface'] = config.interface
-    metadata['hosts'] = {}
+    logging.info("Start time {}".format(time.asctime()))
+    logging.info("Interface {}".format(config.interface))
 
-    with state.open_ebpf(metadata) as b:
-        metadata['interface_idx'] = state.idx
-        metadata['results'] = []
-
-        logging.info("start")
-        rc = 0
-        resultcounts = [0]*CPU_COUNT
-        while True:
-            try:
-                time.sleep(1)
-                logging.debug("wakeup resultcount {}".format(rc))
-                _print_debug_counters(b)
-                newrc = _write_results(b, resultcounts, metadata, config)
-                rc += newrc
-                if newrc > 0:
-                    logging.info("new results written: {}, total: {}".format(newrc, rc))
-            except KeyboardInterrupt:
-                break
-            
-        logging.info("done; waiting 0.5s for any stray responses")
-        time.sleep(0.5)
-        logging.info("removing filters and shutting down")
-
-        rc += _write_results(b, resultcounts, metadata, config, dumpall=True)
-        logging.info("final result count: {}".format(rc))
-        if config.debug:
-            _print_debug_info(b)
-
-    with open("{}_meta.json".format(config.filebase), 'w') as outfile:
-        json.dump(metadata, outfile)
+    with open("{}.csv".format(config.filebase), 'w') as csvfile:
+        csvout = csv.writer(csvfile)
+        csvout.writerow(['recvcpu','seq','origseq','latency','sendtime','recvtime','dest','responder','outttl','recvttl','sport','dport','protocol','outipid','inipid'])
+        with state.open_ebpf() as b:
+            logging.info("Interface index {}".format(state.idx))
+            rc = 0
+            resultcounts = [0]*CPU_COUNT
+            while True:
+                try:
+                    time.sleep(1)
+                    logging.debug("wakeup resultcount {}".format(rc))
+                    _print_debug_counters(b)
+                    newrc = _write_results(b, resultcounts, csvout, config)
+                    rc += newrc
+                    if newrc > 0:
+                        logging.info("New results written: {}, total: {}".format(newrc, rc))
+                except KeyboardInterrupt:
+                    break
+                
+            logging.info("done; waiting 0.5s for any stray responses")
+            time.sleep(0.5)
+            logging.info("removing filters and shutting down")
+    
+            rc += _write_results(b, resultcounts, csvout, config, dumpall=True)
+            logging.info("final result count: {}".format(rc))
+            if config.debug:
+                _print_debug_info(b)
 
 
 def arg_sanity_checks(args):
