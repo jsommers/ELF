@@ -91,5 +91,7 @@ if __name__ == '__main__':
     parser.add_argument('--outname', '-o', default='tsplot', type=str, help='Output file name for timeseries plot')
     parser.add_argument('--cols', default=2, type=int, help='Number of columns in legend on plot')
     args = parser.parse_args()
+    if args.seq is None:
+        args.seq = []
     for f in args.inputfiles:
         main(f, args)
