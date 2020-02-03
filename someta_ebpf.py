@@ -9,6 +9,7 @@ import ctypes
 import ipaddress
 import logging
 import os
+import signal
 import socket
 import sys
 import time
@@ -276,10 +277,20 @@ def _print_debug_info(b):
         except ValueError:   
             break
 
+done = False
+
+def sighandler(*args):
+    logging.info("Got termination signal")
+    global done
+    done = True
 
 def main(config):
     state = RunState(config)
     state.setup()
+    global done
+    signal.signal(signal.SIGINT, sighandler)
+    signal.signal(signal.SIGTERM, sighandler)
+    signal.signal(signal.SIGHUP, sighandler)
 
     logging.info("Start time {}".format(time.asctime()))
     logging.info("Interface {}".format(config.interface))
@@ -291,7 +302,7 @@ def main(config):
             logging.info("Interface index {}".format(state.idx))
             rc = 0
             resultcounts = [0]*CPU_COUNT
-            while True:
+            while not done:
                 try:
                     time.sleep(1)
                     logging.debug("wakeup resultcount {}".format(rc))
