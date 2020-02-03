@@ -83,7 +83,8 @@ def _set_bpf_jumptable(bpf, tablename, idx, fnname, progtype):
 class RunState(object):
     def __init__(self, args):
         self._args = args
-    
+        self._addrs = []
+
     def setup(self):
         '''
         Do some basic setup for logging, bpf, etc.
@@ -208,8 +209,11 @@ class RunState(object):
         for name in self._args.addresses:
             for family,_,_,_,sockaddr in socket.getaddrinfo(name, None):
                 addr = sockaddr[0]
+                if addr in self._addrs:
+                    continue
                 logging.info("host of interest: address {} name {}".format(addr, name))
                 new_address_of_interest(b['trie'], addr, destinfo)
+                self._addrs.append(addr)
 
 def _write_results(b, rcounts, csvout, config, dumpall=False):
     xcount = 0
