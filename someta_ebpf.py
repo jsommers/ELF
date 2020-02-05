@@ -306,6 +306,7 @@ def main(config):
                     time.sleep(1)
                     logging.debug("wakeup resultcount {}".format(rc))
                     _print_debug_counters(b)
+                    _log_kernel_messages(b)
                     newrc = _write_results(b, resultcounts, csvout, config)
                     rc += newrc
                     if newrc > 0:
