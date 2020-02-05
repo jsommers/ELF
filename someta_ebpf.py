@@ -267,18 +267,17 @@ def _print_debug_info(b):
                 print("{:02x}".format(k._u._addr8[i]), end='', sep='')
         print(v)
 
-    logging.debug("kernel debug messages: ")
+def _log_kernel_messages(b):
     while True:
         try:
             task,pid,cpu,flags,ts,msg = b.trace_fields(nonblocking=True)
             if task is None:
                 break
-            logging.debug("ktime {} cpu{} {} flags:{} {}".format(ts, cpu, task.decode(errors='ignore'), flags.decode(errors='ignore'), msg.decode(errors='ignore')).replace('%',''))
+            logging.info("trace_printk: ktime {} cpu{} {} flags:{} {}".format(ts, cpu, task.decode(errors='ignore'), flags.decode(errors='ignore'), msg.decode(errors='ignore')).replace('%',''))
         except ValueError:   
             break
 
 done = False
-
 def sighandler(*args):
     logging.info("Got termination signal")
     global done
@@ -322,6 +321,7 @@ def main(config):
             logging.info("final result count: {}".format(rc))
             if config.debug:
                 _print_debug_info(b)
+            _log_kernel_messages(b)
 
 
 def arg_sanity_checks(args):
