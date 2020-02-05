@@ -92,14 +92,20 @@ class RunState(object):
         '''
         fmt = '%(asctime)-15s %(levelname)s %(message)s'
         loglevel = logging.INFO
+
+        # quiet option implies send log messages to file
+        if self._args.quiet:
+            self._args.logfile = True
+
         if self._args.debug:
             loglevel = logging.DEBUG
         if self._args.logfile:
             logging.basicConfig(level=loglevel, format=fmt, filename=self._args.filebase + '.log', filemode='w')
-            sh = logging.StreamHandler()
-            sh.setLevel(loglevel)
-            sh.setFormatter(logging.Formatter(fmt=fmt))
-            logging.getLogger().addHandler(sh)
+            if not self._args.quiet:
+                sh = logging.StreamHandler()
+                sh.setLevel(loglevel)
+                sh.setFormatter(logging.Formatter(fmt=fmt))
+                logging.getLogger().addHandler(sh)
         else:
             logging.basicConfig(level=loglevel, format='%(asctime)-15s %(levelname)s %(message)s')
 
@@ -341,6 +347,7 @@ if __name__ == '__main__':
     parser.add_argument('-i', '--interface', required=True, type=str, help='Interface/device to use')
     parser.add_argument('-e', '--encapsulation', choices=('ethernet', 'ipinip', 'ip6inip'), default='ethernet', help='How packets are encapsulated on the wire')
     parser.add_argument('addresses', metavar='addresses', nargs='*', type=str, help='IP addresses of interest')
+    parser.add_argument('-q' ,'--quiet', action='store_true', default=False, help='Turn off logging to stdout (implies -l)')
     args = parser.parse_args()
     arg_sanity_checks(args)
     main(args)
