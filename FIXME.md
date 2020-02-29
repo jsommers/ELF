@@ -1,15 +1,9 @@
 # fixme list
 
  - name
-   bandaid
-   bpfinjector
+   eppt: eBPF Path Performance Tracer
 
- - output format: do csv; add metadata as comments at the top
-   change filename stuff just `base.log` and `base.csv`.
-   - easier import and analysis, and metadata is pretty simple
-   - logfile can also have some metadata in it???
- - not clear whether it is avoiding probing non-responsive hops correctly
-   (see cloudlab/utah results)
+ - handling non-responsive hops needs to be done still
 
 # done
  - parameterize probe rate
