@@ -143,5 +143,6 @@ if __name__ == '__main__':
     for f in args.inputfiles:
         firstwrite, hostmap = readlog(f)
         for loc,addr in sorted(hostmap.items()):
+            print(f"Processing results for {loc} ({addr}) in {f}")
             df = readdata(f, firstwrite)
             main(df, args, str(addr))
