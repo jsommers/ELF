@@ -12,7 +12,7 @@ fi
 
 NDTHOSTS="ndt-iupui-mlab1-lga03.measurement-lab.org ndt-iupui-mlab1-sin01.measurement-lab.org ndt-iupui-mlab1-nbo01.measurement-lab.org ndt-iupui-mlab1-vie01.measurement-lab.org ndt-iupui-mlab1-dub01.measurement-lab.org ndt-iupui-mlab1-ams03.measurement-lab.org ndt-iupui-mlab1-mia03.measurement-lab.org ndt-iupui-mlab1-sea03.measurement-lab.org ndt-iupui-mlab1-dfw03.measurement-lab.org ndt-iupui-mlab1-akl01.measurement-lab.org"
 
-/usr/bin/python3 /home/jsommers/someta_testapi/someta_ebpf.py -q -l -f ebpf_${TSTAMP} -i ${INTERFACE} ${NDTHOSTS} &
+/usr/bin/python3 /home/jsommers/eppt/eppt.py -q -l -f eppt_${TSTAMP} -i ${INTERFACE} ${NDTHOSTS} &
 ebpfpid=$!
 
 for host in $NDTHOSTS; do

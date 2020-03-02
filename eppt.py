@@ -173,7 +173,7 @@ class RunState(object):
         '''
         self._open_pyroute2()
         self._build_bpf_cflags()
-        b = BPF(src_file='someta_ebpf.c', debug=self._bcc_debugflag, cflags=self._cflags)
+        b = BPF(src_file='eppt.c', debug=self._bcc_debugflag, cflags=self._cflags)
         self._register_addresses_of_interest(b)
 
         b['counters'][ctypes.c_int(RESULTS_IDX)] = ctypes.c_int(0)
@@ -340,7 +340,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-I', '--ingress', choices=('pass','drop'), default='drop', help='Specify how ingress ICMP time exceeded messages should be handled: pass through to OS or drop in XDP')
     parser.add_argument('-l', '--logfile', default=False, action='store_true', help='Turn on logfile output')
-    parser.add_argument('-f', '--filebase', default='ebpf_probe', help='Configure base name for log and data output files')
+    parser.add_argument('-f', '--filebase', default='eppt', help='Configure base name for log and data output files')
     parser.add_argument('-d', '--debug', default=False, action='store_true', help='Turn on debug logging')
     parser.add_argument('-p', '--probeint', default=10, type=int, help='Minimum probe interval (milliseconds)')
     parser.add_argument('-r', '--ratetype', choices=('g','global','h','perhop'), help='Probe rate type: global or per hop; default is per hop => longer path for per-hop type implies higher measurement probe rate')
