@@ -60,7 +60,7 @@ def plotone(ax, df, ttl, smooth):
         onehop['latency'] = (onehop['latency'] / 1000000).ewm(alpha=0.9).mean()
     elif smooth == 'none' or smooth is None:
         onehop['latency'] = onehop['latency'] / 1000000
-    ax = onehop.plot.line(x='sendtime', y='latency', marker='.', c='C{}'.format(ttl-1), ax=ax, grid=True, label="hop {}".format(ttl))
+    ax = onehop.plot.line(x='send', y='latency', marker='.', c='C{}'.format(ttl-1), ax=ax, grid=True, label="hop {}".format(ttl))
     ax.set_ylabel('latency (millisec)')
     ax.set_xlabel('time (seconds)')
     return ax
@@ -91,6 +91,41 @@ def doplot(df, outname, cols, xlim, ylim, smooth):
     plt.legend(ncol=cols, loc='upper left', fontsize=8)
     plt.savefig('{}.pdf'.format(outname), layout='tight')
 
+def gather_routes(df, dest):
+    df = df.query('outttl > 0 & dest == @dest')
+    flows = df[['protocol','sport','dport']].drop_duplicates()
+    allroutes = {}
+    for i in range(len(flows)):
+        f = flows.iloc[i,:]
+        flowdata = df.query('protocol == @f.protocol & sport == @f.sport & dport == @f.dport')
+        routemap = {}
+        for hop in flowdata.outttl.unique():
+            resp = flowdata[flowdata['outttl'] == hop][['send','responder','seq']]
+            uniqreq = resp.responder.dropna().unique()
+            if len(uniqreq) == 0:
+                continue
+            elif len(uniqreq) == 1:
+                routemap[hop] = uniqreq[0]
+            else:
+                routemap[hop] = uniqreq.tolist()
+        allroutes[tuple(f.to_list())] = routemap
+    return pd.DataFrame(allroutes)
+
+
+def analyze_routes(rinfo):
+    route_change = False
+    rset = set()
+    for i in range(len(rinfo.columns)):
+        froute = rinfo.iloc[:,i]
+        if len(froute) < len(froute.explode()):
+            # multiple addresses per hop; either per-packet
+            # load balancing or route change
+            route_change = True
+        route = tuple(froute.to_list())
+        rset.add(route)
+    return rset, route_change
+
+
 def main(df, args, dest):
     if args.hop is None:
         hops = list(range(1, df.outttl.max()+1))
@@ -99,7 +134,7 @@ def main(df, args, dest):
 
     for h in hops:
         onehop = df[df['outttl'] == h]
-        responses = onehop.query('latency > 0 & dest == @dest')
+        responses = onehop.query('outttl > 0 & latency > 0 & dest == @dest')
         print(f"Hop {h} total {len(onehop)} responses {len(responses)} fracresponse {round(len(responses)/len(onehop), 3)}")
         if len(responses) > 0:
             print("recvttl:", responses['recvttl'].value_counts().to_string())
@@ -118,8 +153,13 @@ def main(df, args, dest):
         print("seq", seq, df[df['seq']==int(seq)][cols])
         print()
 
+    rinfo = gather_routes(df, dest)
+    rset, changes = analyze_routes(rinfo)
+    print(dest, "numroutes", len(rset), "changes", changes)
+    #print(rset)
+
     if args.plot:
-        df = df.query('latency > 0 & dest == @dest')
+        df = df.query('outttl > 0 & latency > 0 & dest == @dest')
         doplot(df, args.outname, cols=args.cols, xlim=args.xlim, ylim=args.ylim, smooth=args.smooth)
 
 
