@@ -9,6 +9,7 @@ import ctypes
 import ipaddress
 import logging
 import os
+import re
 import signal
 import socket
 import sys
@@ -68,7 +69,109 @@ def new_address_of_interest(table, a, dinfo):
         for i in range(4, 16):
             xaddr._u._addr8[i] = 0
             dinfo[idx].dest._u._addr8[i] = 0
-    table[xaddr] = ctypes.c_uint64(idx)
+    if xaddr not in table:
+        logging.debug("Adding address {}".format(a))
+        table[xaddr] = ctypes.c_uint64(idx)
+        return True
+    return False
+
+def _process_addrs(pid):
+    '''
+    (pid) -> set(IP addrs)
+    find all IPv4 addresses associated with a pid (from /proc/pid/net)
+    '''
+    addrs = set()
+    if not pid or not os.path.exists(f"/proc/{pid}"):
+        return addrs
+
+    def _byteswap(s, stride):
+        return ''.join([ s[i:(i+stride)] for i in range(len(s)-stride, -1, -stride) ])
+
+    protos = ['icmp', 'tcp', 'udp']
+    for ipver in ['', '6']:
+        for proto in protos:
+            with open(f'/proc/{pid}/net/{proto}{ipver}') as infile:
+                infile.readline()
+                # remote address is item 3 (index 2) of the form
+                # little endian address:port
+                for line in infile:
+                    remote = line.split()[2]
+                    remaddr,_ = remote.split(':')
+                    if len(remaddr) == 8:
+                        a = ipaddress.ip_address(int(_byteswap(remaddr, 2), base=16))
+                        if a.is_global:
+                            addrs.add(str(a))
+    return addrs
+
+def _app_pids(name):
+    '''
+    (str) -> set(pids)
+    find all process command lines (in /proc) that have app name somewhere in
+    it.  this is a blunt, inaccurate thing to do.
+    '''
+    aset = set()
+    if not name:
+        return aset
+    for entry in os.listdir('/proc'):
+        mobj = re.match("^(?P<pid>\d+)$", entry)
+        if mobj:
+            pid = int(mobj['pid'])
+            cmdline = ""
+            try:
+                with open(f"/proc/{mobj['pid']}/cmdline") as infile:
+                    cmdline = infile.read().lower()
+            except:
+                pass
+
+            if name.lower() in cmdline:
+                aset.add(pid)
+    return aset
+
+def _add_by_address(trie, destinfo, addrset, xfrom):
+    '''
+    (bpftrie, bpfdestinfo, addrset, str) -> None
+    Add IP addresses of interest, by address
+    '''
+    for addr in addrset:
+        name = 'nonamefound'
+        try:
+            hinfo = socket.gethostbyaddr(addr)
+            name = hinfo[0]
+        except:
+            pass
+        if new_address_of_interest(trie, addr, destinfo):
+            logging.info("host of interest ({}): address {} name {}".format(xfrom, addr, name))
+
+def _add_by_hostname(trie, destinfo, hostset):
+    '''
+    (bpftrie, bpfdestinfo, hostset) -> None
+    Add IP addresses of interest, by hostname
+    '''
+    for name in hostset:
+        for family,_,_,_,sockaddr in socket.getaddrinfo(name, None):
+            addr = sockaddr[0]
+            if new_address_of_interest(trie, addr, destinfo):
+                logging.info("host of interest: address {} name {}".format(addr, name))
+
+def add_addresses_of_interest(b, config):
+    '''
+    (bpf, config) -> None
+    Add IP addresses of interest.  Add those specified on the command line,
+    as well as addresses associated with any pid or app specified.
+    '''
+    trie = b['trie']
+    destinfo = b['destinfo']
+
+    if config.pid:
+        _add_by_address(trie, destinfo, process_addrs(config.pid), f"pid {config.pid}")
+    if config.app:
+        addrset = set()
+        pidset = _app_pids(config.app)
+        for pid in pidset:
+            addrset.update(_process_addrs(pid))
+        _add_by_address(trie, destinfo, addrset, f"app {config.app}")
+
+    _add_by_hostname(trie, destinfo, set(config.addresses))
 
 def _set_bpf_jumptable(bpf, tablename, idx, fnname, progtype):
     '''
@@ -84,7 +187,6 @@ def _set_bpf_jumptable(bpf, tablename, idx, fnname, progtype):
 class RunState(object):
     def __init__(self, args):
         self._args = args
-        self._addrs = []
 
     def setup(self):
         '''
@@ -174,7 +276,7 @@ class RunState(object):
         self._open_pyroute2()
         self._build_bpf_cflags()
         b = BPF(src_file='eppt.c', debug=self._bcc_debugflag, cflags=self._cflags)
-        self._register_addresses_of_interest(b)
+        add_addresses_of_interest(b, self._args)
 
         b['counters'][ctypes.c_int(RESULTS_IDX)] = ctypes.c_int(0)
 
@@ -206,21 +308,6 @@ class RunState(object):
             self._ip.tc('del', 'clsact', self._idx)
             self._ipdb.release()
 
-    def _register_addresses_of_interest(self, b):
-        '''
-        (bpf) -> None
-        add IP addresses corresponding to all DNS names given on command line to
-        internal address hash.
-        '''
-        destinfo = b['destinfo']
-        for name in self._args.addresses:
-            for family,_,_,_,sockaddr in socket.getaddrinfo(name, None):
-                addr = sockaddr[0]
-                if addr in self._addrs:
-                    continue
-                logging.info("host of interest: address {} name {}".format(addr, name))
-                new_address_of_interest(b['trie'], addr, destinfo)
-                self._addrs.append(addr)
 
 def _write_results(b, rcounts, csvout, config, dumpall=False):
     xcount = 0
@@ -309,6 +396,7 @@ def main(config):
             resultcounts = [0]*CPU_COUNT
             while not done:
                 try:
+                    add_addresses_of_interest(b, config)
                     time.sleep(1)
                     logging.debug("wakeup resultcount {}".format(rc))
                     _print_debug_counters(b)
@@ -332,6 +420,10 @@ def main(config):
 
 
 def arg_sanity_checks(args):
+    if args.pid and not os.path.exists(f"/proc/{args.pid}"):
+        print(f"pid of interest {args.pid} does not exist.")
+        sys.exit()
+
     if args.probeint < 0 or args.probeint > 1000:
         print("Invalid probe interval (0-1000 is allowed)")
         sys.exit()
@@ -343,6 +435,8 @@ if __name__ == '__main__':
     parser.add_argument('-f', '--filebase', default='eppt', help='Configure base name for log and data output files')
     parser.add_argument('-d', '--debug', default=False, action='store_true', help='Turn on debug logging')
     parser.add_argument('-p', '--probeint', default=10, type=int, help='Minimum probe interval (milliseconds)')
+    parser.add_argument('-P', '--pid', type=int, help='Add PID for process of interest')
+    parser.add_argument('-a', '--app', help='Add app name of interest')
     parser.add_argument('-r', '--ratetype', choices=('g','global','h','perhop'), help='Probe rate type: global or per hop; default is per hop => longer path for per-hop type implies higher measurement probe rate')
     parser.add_argument('-i', '--interface', required=True, type=str, help='Interface/device to use')
     parser.add_argument('-e', '--encapsulation', choices=('ethernet', 'ipinip', 'ip6inip'), default='ethernet', help='How packets are encapsulated on the wire')
