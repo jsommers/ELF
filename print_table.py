@@ -18,7 +18,7 @@ def readlog(fname):
     firstwrite = None
     base,_ = os.path.splitext(fname)
     startpat = re.compile('^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}),(\d{3}) INFO New results written')
-    hostpat = re.compile('^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} INFO host of interest: address (?P<addr>\S+) name (?P<name>\S+)')
+    hostpat = re.compile('^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} INFO host of interest.*address (?P<addr>\S+) name (?P<name>\S+)\s*$')
     hostmap = {}
     with open("{}.log".format(base)) as infile:
         for line in infile:
