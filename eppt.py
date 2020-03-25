@@ -116,14 +116,12 @@ def _app_pids(name):
         mobj = re.match("^(?P<pid>\d+)$", entry)
         if mobj:
             pid = int(mobj['pid'])
-            cmdline = ""
             try:
-                with open(f"/proc/{mobj['pid']}/cmdline") as infile:
-                    cmdline = infile.read().lower()
+                execcmd = os.path.realpath(f"/proc/{mobj['pid']}/exe")
             except:
-                pass
-
-            if name.lower() in cmdline:
+                continue
+            _,execcmd = os.path.split(execcmd)
+            if name.lower() in execcmd.lower():
                 aset.add(pid)
     return aset
 
