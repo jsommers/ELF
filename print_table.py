@@ -7,6 +7,7 @@ import os
 import re
 import sys
 import time
+import ipdb
 
 import pandas as pd
 import numpy as np
@@ -14,35 +15,36 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-def readlog(fname):
+newres = re.compile('^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}),(\d{3}) INFO New results written')
+hostpat = re.compile('INFO host of interest: address (?P<addr>\S+) name (?P<name>\S+)\s*$')
+
+def readlog(fname, mlab):
     firstwrite = None
     base,_ = os.path.splitext(fname)
-    startpat = re.compile('^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}),(\d{3}) INFO New results written')
-    hostpat = re.compile('^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} INFO host of interest.*address (?P<addr>\S+) name (?P<name>\S+)\s*$')
     hostmap = {}
     with open("{}.log".format(base)) as infile:
         for line in infile:
-            mobj = startpat.match(line)
+            mobj = newres.search(line)
             if mobj and firstwrite is None:
                 t = time.strptime(line[:19], '%Y-%m-%d %H:%M:%S')
                 firstwrite = time.mktime(t)+int(mobj[7])/1000
-                firstwrite = pd.Timestamp(ts_input=firstwrite, unit='s', tz='EST')
-                # print("firstwrite", t, firstwrite)
-            mobj = hostpat.match(line)
+                firstwrite = pd.Timestamp(ts_input=firstwrite, unit='s')
+            mobj = hostpat.search(line)
             if mobj:
                 addr = ipaddress.ip_address(mobj['addr'])
-                # ndt-iupui-mlab1-lga03.measurement-lab.org
-                loc = mobj['name'].split('.')[0][-5:][:3]
-                # print(mobj['addr'],mobj['name'])
-                if addr.version == 4:
-                    hostmap[loc] = addr
+                loc = mobj['name']
+                if mlab:
+                    loc = mobj['name'].split('.')[0][-5:][:3]
+                # if addr.version == 4:
+                hostmap[loc] = addr
     return firstwrite, hostmap
 
-def readdata(fname, starttime, tsadj=0):
+def readdata(fname, starttime, absx, tsadj=0):
     df = pd.read_csv(fname)
     df = df.sort_values('sendtime', axis=0)
     series = (df.loc[:, 'sendtime'] - df.loc[:, 'sendtime'].min())/1000000000
-    series = series.sub(tsadj).apply(lambda x: starttime + pd.Timedelta(x, unit='sec'))
+    if absx:
+        series = series.sub(tsadj).apply(lambda x: starttime + pd.Timedelta(x, unit='sec'))
     df = df.assign(send=series)
     return df
 
@@ -65,14 +67,10 @@ def plotone(ax, df, ttl, smooth):
     ax.set_xlabel('time (seconds)')
     return ax
 
-def doplot(df, outname, cols, xlim, ylim, smooth):
+def doplot(df, outname, hops, cols, xlim, ylim, smooth):
     plt.figure(figsize=(6,4))
     ax = plt.subplot(1,1,1)
-    print("max outttl", df.outttl.max())
-    if args.hop is None:
-        hops = list(range(1, df.outttl.max()+1))
-    else:
-        hops = args.hop
+
     for i in hops:
         plotone(ax, df, i, smooth)
 
@@ -89,7 +87,7 @@ def doplot(df, outname, cols, xlim, ylim, smooth):
         ax.set_xlim(*xlim)
 
     plt.legend(ncol=cols, loc='upper left', fontsize=8)
-    plt.savefig('{}.pdf'.format(outname), layout='tight')
+    plt.savefig('{}.png'.format(outname), layout='tight', dpi=400)
 
 def gather_routes(df, dest):
     df = df.query('outttl > 0 & dest == @dest')
@@ -128,13 +126,13 @@ def analyze_routes(rinfo):
 
 def main(df, args, dest):
     if args.hop is None:
-        hops = list(range(1, df.outttl.max()+1))
+        hops = [int(x) for x in range(1, int(df.outttl.max())+1) ]
     else:
         hops = args.hop
 
     for h in hops:
         onehop = df[df['outttl'] == h]
-        responses = onehop.query('outttl > 0 & latency > 0 & dest == @dest')
+        responses = onehop.query('outttl > 0 & latency > 0')
         print(f"Hop {h} total {len(onehop)} responses {len(responses)} fracresponse {round(len(responses)/len(onehop), 3)}")
         if len(responses) > 0:
             print("recvttl:", responses['recvttl'].value_counts().to_string())
@@ -156,11 +154,10 @@ def main(df, args, dest):
     rinfo = gather_routes(df, dest)
     rset, changes = analyze_routes(rinfo)
     print(dest, "numroutes", len(rset), "changes", changes)
-    #print(rset)
 
     if args.plot:
-        df = df.query('outttl > 0 & latency > 0 & dest == @dest')
-        doplot(df, args.outname, cols=args.cols, xlim=args.xlim, ylim=args.ylim, smooth=args.smooth)
+        df = df.query('outttl > 0 & latency > 0').copy()
+        doplot(df, args.outname, hops=hops, cols=args.cols, xlim=args.xlim, ylim=args.ylim, smooth=args.smooth)
 
 
 if __name__ == '__main__':
@@ -171,6 +168,8 @@ if __name__ == '__main__':
     parser.add_argument('--head', type=int, help='Indicate the number of rows to be printed from latency measurements')
     parser.add_argument('--xlim', '-x', default=None, help='xlim for ts plot')
     parser.add_argument('--ylim', '-y', default=None, help='ylim for ts plot')
+    parser.add_argument('--absx', action='store_true', default=False, help='set xaxis to be abs UTC time, not seconds relative to trace begin')
+    parser.add_argument('--mlab', action='store_true', default=False, help='parse location for mlab hosts')
     parser.add_argument('inputfiles', metavar='inputfiles', nargs='+', type=str,
             help='Data files')
     parser.add_argument('--plot', default=False, action='store_true', help='Whether to plot time series or not')
@@ -181,8 +180,11 @@ if __name__ == '__main__':
     if args.seq is None:
         args.seq = []
     for f in args.inputfiles:
-        firstwrite, hostmap = readlog(f)
+        firstwrite, hostmap = readlog(f, args.mlab)
+        df = readdata(f, firstwrite, args.absx)
         for loc,addr in sorted(hostmap.items()):
+            destdf = df[df['dest']==str(addr)].copy()
+            if not len(destdf):
+                continue
             print(f"Processing results for {loc} ({addr}) in {f}")
-            df = readdata(f, firstwrite)
-            main(df, args, str(addr))
+            main(destdf, args, str(addr))
