@@ -7,7 +7,7 @@ import os
 import re
 import sys
 import time
-import ipdb
+from collections import defaultdict
 
 import pandas as pd
 import numpy as np
@@ -21,7 +21,7 @@ hostpat = re.compile('INFO host of interest: address (?P<addr>\S+) name (?P<name
 def readlog(fname, mlab):
     firstwrite = None
     base,_ = os.path.splitext(fname)
-    hostmap = {}
+    hostmap = defaultdict(set)
     with open("{}.log".format(base)) as infile:
         for line in infile:
             mobj = newres.search(line)
@@ -35,8 +35,7 @@ def readlog(fname, mlab):
                 loc = mobj['name']
                 if mlab:
                     loc = mobj['name'].split('.')[0][-5:][:3]
-                # if addr.version == 4:
-                hostmap[loc] = addr
+                hostmap[loc].add(addr)
     return firstwrite, hostmap
 
 def readdata(fname, starttime, absx, tsadj=0):
@@ -67,9 +66,10 @@ def plotone(ax, df, ttl, smooth):
     ax.set_xlabel('time (seconds)')
     return ax
 
-def doplot(df, outname, hops, cols, xlim, ylim, smooth):
+def doplot(df, outname, dest, idx, hops, cols, xlim, ylim, smooth):
     plt.figure(figsize=(6,4))
     ax = plt.subplot(1,1,1)
+    plt.title(f"destination: {dest}")
 
     for i in hops:
         plotone(ax, df, i, smooth)
@@ -87,7 +87,7 @@ def doplot(df, outname, hops, cols, xlim, ylim, smooth):
         ax.set_xlim(*xlim)
 
     plt.legend(ncol=cols, loc='upper left', fontsize=8)
-    plt.savefig('{}.png'.format(outname), layout='tight', dpi=400)
+    plt.savefig(f'{outname}{idx}.png', layout='tight', dpi=400)
 
 def gather_routes(df, dest):
     df = df.query('outttl > 0 & dest == @dest')
@@ -124,7 +124,7 @@ def analyze_routes(rinfo):
     return rset, route_change
 
 
-def main(df, args, dest):
+def main(df, args, dest, idx):
     if args.hop is None:
         hops = [int(x) for x in range(1, int(df.outttl.max())+1) ]
     else:
@@ -157,7 +157,7 @@ def main(df, args, dest):
 
     if args.plot:
         df = df.query('outttl > 0 & latency > 0').copy()
-        doplot(df, args.outname, hops=hops, cols=args.cols, xlim=args.xlim, ylim=args.ylim, smooth=args.smooth)
+        doplot(df, args.outname, dest, idx, hops=hops, cols=args.cols, xlim=args.xlim, ylim=args.ylim, smooth=args.smooth)
 
 
 if __name__ == '__main__':
@@ -179,12 +179,15 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.seq is None:
         args.seq = []
+    idx = 1
     for f in args.inputfiles:
         firstwrite, hostmap = readlog(f, args.mlab)
         df = readdata(f, firstwrite, args.absx)
-        for loc,addr in sorted(hostmap.items()):
-            destdf = df[df['dest']==str(addr)].copy()
-            if not len(destdf):
-                continue
-            print(f"Processing results for {loc} ({addr}) in {f}")
-            main(destdf, args, str(addr))
+        for loc,addrset in sorted(hostmap.items()):
+            for addr in addrset:
+                destdf = df[df['dest']==str(addr)].copy()
+                if not len(destdf):
+                    continue
+                print(f"Processing results for {loc} ({addr}) in {f}")
+                main(destdf, args, str(addr), idx)
+                idx += 1
