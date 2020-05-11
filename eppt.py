@@ -264,6 +264,7 @@ class RunState(object):
             bcc_debugflag = bcc.DEBUG_BPF_REGISTER_STATE | bcc.DEBUG_SOURCE | bcc.DEBUG_BPF | bcc.DEBUG_LLVM_IR 
 
         self._cflags = cflags
+        logging.info("eppt CFLAGS: {}".format(' '.join(cflags)))
 
     @contextmanager
     def open_ebpf(self):
