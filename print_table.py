@@ -105,7 +105,7 @@ def gather_routes(df, dest):
             elif len(uniqreq) == 1:
                 routemap[hop] = uniqreq[0]
             else:
-                routemap[hop] = uniqreq.tolist()
+                routemap[hop] = tuple(uniqreq.tolist())
         allroutes[tuple(f.to_list())] = routemap
     return pd.DataFrame(allroutes)
 
@@ -133,7 +133,8 @@ def main(df, args, dest, idx):
     for h in hops:
         onehop = df[df['outttl'] == h]
         responses = onehop.query('outttl > 0 & latency > 0')
-        print(f"Hop {h} total {len(onehop)} responses {len(responses)} fracresponse {round(len(responses)/len(onehop), 3)}")
+        respip = responses.responder.value_counts().to_string()
+        print(f"Hop {h} total {len(onehop)} responses {len(responses)} fracresponse {round(len(responses)/len(onehop), 3)} responders {respip}")
         if len(responses) > 0:
             print("recvttl:", responses['recvttl'].value_counts().to_string())
             lats = responses['latency'].div(1000000)
