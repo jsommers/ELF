@@ -184,11 +184,18 @@ if __name__ == '__main__':
     for f in args.inputfiles:
         firstwrite, hostmap = readlog(f, args.mlab)
         df = readdata(f, firstwrite, args.absx)
-        for loc,addrset in sorted(hostmap.items()):
-            for addr in addrset:
-                destdf = df[df['dest']==str(addr)].copy()
-                if not len(destdf):
-                    continue
-                print(f"Processing results for {loc} ({addr}) in {f}")
-                main(destdf, args, str(addr), idx)
+        if not hostmap:
+            for h in df['dest'].dropna().unique():
+                xdf = df[df['dest']==h].copy()
+                print(f"Processing results for dest {h} in {f}")
+                main(xdf, args, str(h), idx)
                 idx += 1
+        else:
+            for loc,addrset in sorted(hostmap.items()):
+                for addr in addrset:
+                    destdf = df[df['dest']==str(addr)].copy()
+                    if not len(destdf):
+                        continue
+                    print(f"Processing results for {loc} ({addr}) in {f}")
+                    main(destdf, args, str(addr), idx)
+                    idx += 1
