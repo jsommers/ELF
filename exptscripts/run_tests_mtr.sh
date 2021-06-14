@@ -14,7 +14,7 @@ fi
 #NDTHOSTS="ndt-iupui-mlab1-lga03.measurement-lab.org ndt-iupui-mlab1-sin01.measurement-lab.org ndt-iupui-mlab1-nbo01.measurement-lab.org ndt-iupui-mlab1-vie01.measurement-lab.org ndt-iupui-mlab1-dub01.measurement-lab.org ndt-iupui-mlab1-ams03.measurement-lab.org ndt-iupui-mlab1-mia03.measurement-lab.org ndt-iupui-mlab1-sea03.measurement-lab.org ndt-iupui-mlab1-dfw03.measurement-lab.org ndt-iupui-mlab1-akl01.measurement-lab.org"
 
 NDTHOSTS="ndt-iupui-mlab1-lga03.measurement-lab.org"
-python3 ./someta_testapi/eppt.py -q -I pass -l -f eppt_${TSTAMP} -i ${INTERFACE} ${NDTHOSTS} &
+python3 ./elfprobe.py -q -I pass -l -f elf_${TSTAMP} -i ${INTERFACE} ${NDTHOSTS} &
 ebpfpid=$!
 
 for host in $NDTHOSTS; do
