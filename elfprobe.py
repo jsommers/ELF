@@ -264,7 +264,7 @@ class RunState(object):
             bcc_debugflag = bcc.DEBUG_BPF_REGISTER_STATE | bcc.DEBUG_SOURCE | bcc.DEBUG_BPF | bcc.DEBUG_LLVM_IR 
 
         self._cflags = cflags
-        logging.info("eppt CFLAGS: {}".format(' '.join(cflags)))
+        logging.info("elf CFLAGS: {}".format(' '.join(cflags)))
 
     @contextmanager
     def open_ebpf(self):
@@ -274,7 +274,7 @@ class RunState(object):
         '''
         self._open_pyroute2()
         self._build_bpf_cflags()
-        b = BPF(src_file='eppt.c', debug=self._bcc_debugflag, cflags=self._cflags)
+        b = BPF(src_file='elfprobe.c', debug=self._bcc_debugflag, cflags=self._cflags)
         add_addresses_of_interest(b, self._args)
 
         b['counters'][ctypes.c_int(RESULTS_IDX)] = ctypes.c_int(0)
@@ -431,7 +431,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-I', '--ingress', choices=('pass','drop'), default='drop', help='Specify how ingress ICMP time exceeded messages should be handled: pass through to OS or drop in XDP')
     parser.add_argument('-l', '--logfile', default=False, action='store_true', help='Turn on logfile output')
-    parser.add_argument('-f', '--filebase', default='eppt', help='Configure base name for log and data output files')
+    parser.add_argument('-f', '--filebase', default='elf', help='Configure base name for log and data output files')
     parser.add_argument('-d', '--debug', default=False, action='store_true', help='Turn on debug logging')
     parser.add_argument('-p', '--probeint', default=10, type=int, help='Minimum probe interval (milliseconds)')
     parser.add_argument('-P', '--pid', type=int, help='Add PID for process of interest')

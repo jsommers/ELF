@@ -15,7 +15,7 @@ fi
 pushd $XHOME
 NDTHOSTS="ndt-iupui-mlab1-lga03.measurement-lab.org ndt-iupui-mlab1-sin01.measurement-lab.org ndt-iupui-mlab1-nbo01.measurement-lab.org ndt-iupui-mlab1-vie01.measurement-lab.org ndt-iupui-mlab1-dub01.measurement-lab.org ndt-iupui-mlab1-ams03.measurement-lab.org ndt-iupui-mlab1-mia03.measurement-lab.org ndt-iupui-mlab1-sea03.measurement-lab.org ndt-iupui-mlab1-dfw03.measurement-lab.org ndt-iupui-mlab1-akl01.measurement-lab.org"
 
-/usr/bin/python3 ${XHOME}/eppt/eppt.py -q -l -f ${CLOUDLABSITE}_eppt_${TSTAMP} -i ${INTERFACE} ${NDTHOSTS} &
+/usr/bin/python3 ${XHOME}/elf/elfprobe.py -q -l -f ${CLOUDLABSITE}_elf_${TSTAMP} -i ${INTERFACE} ${NDTHOSTS} &
 ebpfpid=$!
 
 for host in $NDTHOSTS; do
