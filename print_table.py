@@ -16,9 +16,9 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 newres = re.compile('^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}),(\d{3}) INFO New results written')
-hostpat = re.compile('INFO host of interest: address (?P<addr>\S+) name (?P<name>\S+)\s*$')
+hostpat = re.compile('INFO host of interest[ \w\)\(-]*: address (?P<addr>\S+) name (?P<name>\S+)\s*$')
 
-def readlog(fname, mlab):
+def readlog(fname):
     firstwrite = None
     base,_ = os.path.splitext(fname)
     hostmap = defaultdict(set)
@@ -33,8 +33,8 @@ def readlog(fname, mlab):
             if mobj:
                 addr = ipaddress.ip_address(mobj['addr'])
                 loc = mobj['name']
-                if mlab:
-                    loc = mobj['name'].split('.')[0][-5:][:3]
+                if loc == 'nonamefound':
+                    loc = str(addr)
                 hostmap[loc].add(addr)
     return firstwrite, hostmap
 
@@ -170,7 +170,6 @@ if __name__ == '__main__':
     parser.add_argument('--xlim', '-x', default=None, help='xlim for ts plot')
     parser.add_argument('--ylim', '-y', default=None, help='ylim for ts plot')
     parser.add_argument('--absx', action='store_true', default=False, help='set xaxis to be abs UTC time, not seconds relative to trace begin')
-    parser.add_argument('--mlab', action='store_true', default=False, help='parse location for mlab hosts')
     parser.add_argument('inputfiles', metavar='inputfiles', nargs='+', type=str,
             help='Data files')
     parser.add_argument('--plot', default=False, action='store_true', help='Whether to plot time series or not')
@@ -182,7 +181,7 @@ if __name__ == '__main__':
         args.seq = []
     idx = 1
     for f in args.inputfiles:
-        firstwrite, hostmap = readlog(f, args.mlab)
+        firstwrite, hostmap = readlog(f)
         df = readdata(f, firstwrite, args.absx)
         if not hostmap:
             for h in df['dest'].dropna().unique():
