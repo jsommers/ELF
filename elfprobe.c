@@ -1,5 +1,5 @@
 /*
- * FIXME: header for this file
+ * elfprobe.c: main eBPF code for ELF
  */
 
 #define BPF_LICENSE GPL

@@ -35,7 +35,7 @@ def readlog(fname):
                 loc = mobj['name']
                 if loc == 'nonamefound':
                     loc = str(addr)
-                hostmap[loc].add(addr)
+                hostmap[str(addr)].add(str(loc))
     return firstwrite, hostmap
 
 def readdata(fname, starttime, absx, tsadj=0):
@@ -69,7 +69,7 @@ def plotone(ax, df, ttl, smooth):
 def doplot(df, outname, dest, idx, hops, cols, xlim, ylim, smooth):
     plt.figure(figsize=(6,4))
     ax = plt.subplot(1,1,1)
-    plt.title(f"destination: {dest}")
+    plt.title(f"{dest}")
 
     for i in hops:
         plotone(ax, df, i, smooth)
@@ -87,52 +87,25 @@ def doplot(df, outname, dest, idx, hops, cols, xlim, ylim, smooth):
         ax.set_xlim(*xlim)
 
     plt.legend(ncol=cols, loc='upper left', fontsize=8)
-    plt.savefig(f'{outname}{idx}.png', layout='tight', dpi=400)
+    plt.savefig(f'{outname}{idx}.png', dpi=400)
 
-def gather_routes(df, dest):
-    df = df.query('outttl > 0 & dest == @dest')
-    flows = df[['protocol','sport','dport']].drop_duplicates()
-    allroutes = {}
-    for i in range(len(flows)):
-        f = flows.iloc[i,:]
-        flowdata = df.query('protocol == @f.protocol & sport == @f.sport & dport == @f.dport')
-        routemap = {}
-        for hop in flowdata.outttl.unique():
-            resp = flowdata[flowdata['outttl'] == hop][['send','responder','seq']]
-            uniqreq = resp.responder.dropna().unique()
-            if len(uniqreq) == 0:
-                continue
-            elif len(uniqreq) == 1:
-                routemap[hop] = uniqreq[0]
-            else:
-                routemap[hop] = tuple(uniqreq.tolist())
-        allroutes[tuple(f.to_list())] = routemap
-    return pd.DataFrame(allroutes)
-
-
-def analyze_routes(rinfo):
-    route_change = False
-    rset = set()
-    for i in range(len(rinfo.columns)):
-        froute = rinfo.iloc[:,i]
-        if len(froute) < len(froute.explode()):
-            # multiple addresses per hop; either per-packet
-            # load balancing or route change
-            route_change = True
-        route = tuple(froute.to_list())
-        rset.add(route)
-    return rset, route_change
-
-
-def main(df, args, dest, idx):
+def main(df, args, flowinfo, desthost, idx):
     if args.hop is None:
         hops = [int(x) for x in range(1, int(df.outttl.max())+1) ]
     else:
         hops = args.hop
 
+    if args.aggflows:
+        print(f"\nFlow {idx+1} dest {flowinfo.dest} records {len(df)}")
+    else:
+        print(f"\nFlow {idx+1} dest {flowinfo.dest} sport {flowinfo.sport} dport {flowinfo.dport} protocol {flowinfo.protocol} records {len(df)}")
+
     for h in hops:
         onehop = df[df['outttl'] == h]
-        responses = onehop.query('outttl > 0 & latency > 0')
+        responses = onehop.query('outttl>0&latency>0').copy()
+        if len(onehop) == 0:
+            continue
+
         respip = responses.responder.value_counts().to_string()
         print(f"Hop {h} total {len(onehop)} responses {len(responses)} fracresponse {round(len(responses)/len(onehop), 3)} responders {respip}")
         if len(responses) > 0:
@@ -152,13 +125,12 @@ def main(df, args, dest, idx):
         print("seq", seq, df[df['seq']==int(seq)][cols])
         print()
 
-    rinfo = gather_routes(df, dest)
-    rset, changes = analyze_routes(rinfo)
-    print(dest, "numroutes", len(rset), "changes", changes)
-
     if args.plot:
-        df = df.query('outttl > 0 & latency > 0').copy()
-        doplot(df, args.outname, dest, idx, hops=hops, cols=args.cols, xlim=args.xlim, ylim=args.ylim, smooth=args.smooth)
+        if df.groupby('outttl').count().max().max() <= 2:
+            print(f"\nFlow {idx+1} dest {flowinfo.dest} not enough data to plot")
+            return
+        df = df[df['outttl']>0]
+        doplot(df, args.outname, desthost, idx, hops=hops, cols=args.cols, xlim=args.xlim, ylim=args.ylim, smooth=args.smooth)
 
 
 if __name__ == '__main__':
@@ -173,6 +145,7 @@ if __name__ == '__main__':
     parser.add_argument('inputfiles', metavar='inputfiles', nargs='+', type=str,
             help='Data files')
     parser.add_argument('--plot', default=False, action='store_true', help='Whether to plot time series or not')
+    parser.add_argument('--aggflows', default=False, action='store_true', help='Aggregate flows by destination in plots')
     parser.add_argument('--all', default=False, action='store_true', help='Print all data lines')
     parser.add_argument('--outname', '-o', default='tsplot', type=str, help='Output file name for timeseries plot')
     parser.add_argument('--cols', default=2, type=int, help='Number of columns in legend on plot')
@@ -183,18 +156,17 @@ if __name__ == '__main__':
     for f in args.inputfiles:
         firstwrite, hostmap = readlog(f)
         df = readdata(f, firstwrite, args.absx)
-        if not hostmap:
-            for h in df['dest'].dropna().unique():
-                xdf = df[df['dest']==h].copy()
-                print(f"Processing results for dest {h} in {f}")
-                main(xdf, args, str(h), idx)
-                idx += 1
+        if args.aggflows:
+            flows = df[['dest']].drop_duplicates()
         else:
-            for loc,addrset in sorted(hostmap.items()):
-                for addr in addrset:
-                    destdf = df[df['dest']==str(addr)].copy()
-                    if not len(destdf):
-                        continue
-                    print(f"Processing results for {loc} ({addr}) in {f}")
-                    main(destdf, args, str(addr), idx)
-                    idx += 1
+            flows = df[['protocol','sport','dport','dest']].drop_duplicates()
+
+        for i in range(len(flows)):
+            fid = flows.iloc[i,:]
+            if args.aggflows:
+                flowdata = df[df['dest']==fid.dest]
+            else:
+                flowdata = df.query('dest==@fid.dest&protocol==@fid.protocol&sport==@fid.sport&dport==@fid.dport').copy()
+            if not len(flowdata):
+                continue
+            main(flowdata, args, fid, f"{fid.dest}: {','.join(hostmap.get(fid.dest))}", i)
