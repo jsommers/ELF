@@ -258,6 +258,9 @@ class RunState(object):
         elif self._args.ingress == 'drop':
             cflags.append('-DINGRESS_ACTION=XDP_DROP')
 
+        if self._args.notrunc:
+            cflags.append('-DNOTRUNCATE')
+
         self._bcc_debugflag = bcc.DEBUG_SOURCE
         if self._args.debug:
             cflags.append('-DDEBUG=1')
@@ -438,6 +441,7 @@ if __name__ == '__main__':
     parser.add_argument('-a', '--app', help='Add app name of interest')
     parser.add_argument('-r', '--ratetype', choices=('g','global','h','perhop'), help='Probe rate type: global or per hop; default is per hop => longer path for per-hop type implies higher measurement probe rate')
     parser.add_argument('-i', '--interface', required=True, type=str, help='Interface/device to use')
+    parser.add_argument('-T', '--notrunc', default=False, action='store_true', help='Don\'t truncate probe payload')
     parser.add_argument('-e', '--encapsulation', choices=('ethernet', 'ipinip', 'ip6inip'), default='ethernet', help='How packets are encapsulated on the wire')
     parser.add_argument('addresses', metavar='addresses', nargs='*', type=str, help='IP addresses of interest')
     parser.add_argument('-q' ,'--quiet', action='store_true', default=False, help='Turn off logging to stdout (implies -l)')

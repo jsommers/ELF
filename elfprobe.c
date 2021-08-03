@@ -188,6 +188,8 @@ BPF_HASH(sentinfo, u64, struct sent_info); // key: destid | sequence
 BPF_PERCPU_ARRAY(results, struct latency_sample, MAXRESULTS); // key: index 0 in counters
 BPF_PERCPU_ARRAY(resultscount, int, 1);
 
+#include "elfhooks.c"
+
 static inline void _update_maxttl(int idx, int ttl) {
     struct probe_dest *pd = destinfo.lookup(&idx);
     if (pd == NULL) {
@@ -375,6 +377,14 @@ int egress_v4_icmp(struct __sk_buff *ctx) {
         return TC_ACT_SHOT;
     }
 
+    rv = elf_v4_icmp_beforesend(ctx);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS icmp4 beforesend fail\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+
     // save info about outgoing probe into hash
     // hashed on: idx|sequence
     u64 sentkey = (u64)idx << 32 | (u64)sequence;
@@ -459,6 +469,11 @@ int egress_v4_tcp(struct __sk_buff *ctx) {
     bpf_trace_printk("EGRESS tcp4 after clone emit %lu\n", sequence);
 #endif
 
+#ifdef NOTRUNCATE
+#ifdef DEBUG
+    bpf_trace_printk("EGRESS tcp4 not truncating\n");
+#endif
+#else
     struct _tcphdr newtcp;
     __builtin_memset(&newtcp, 0, sizeof(struct _tcphdr));
     newtcp.th_sport = bpf_htons(sport);
@@ -519,6 +534,7 @@ int egress_v4_tcp(struct __sk_buff *ctx) {
 #endif
         return TC_ACT_SHOT;
     }
+#endif // NOTRUNCATE
 
     u16 old_ttl_proto = load_half(ctx, NHOFFSET + IP_TTL_OFF);
     u16 new_ttl_proto = bpf_htons(((u16)newttl) << 8 | IPPROTO_TCP);
@@ -535,6 +551,14 @@ int egress_v4_tcp(struct __sk_buff *ctx) {
     if (rv < 0) {
 #if DEBUG
         bpf_trace_printk("EGRESS tcp4 failed to store new ttl/proto\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+
+    rv = elf_v4_tcp_beforesend(ctx);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS tcp4 beforesend fail\n");
 #endif
         return TC_ACT_SHOT;
     }
@@ -631,6 +655,11 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     bpf_trace_printk("EGRESS udp4 after clone emit %lu\n", sequence);
 #endif
 
+#ifdef NOTRUNCATE
+#ifdef DEBUG
+    bpf_trace_printk("EGRESS udp4 not truncating\n");
+#endif
+#else
     csum += bpf_htons(sport);
     csum += bpf_htons(dport);
     csum += bpf_htons(20);
@@ -706,6 +735,7 @@ int egress_v4_udp(struct __sk_buff *ctx) {
 #endif
         return TC_ACT_SHOT;
     }
+#endif // NOTRUNCATE
 
     u16 old_ttl_proto = load_half(ctx, NHOFFSET + IP_TTL_OFF);
     u16 new_ttl_proto = bpf_htons(((u16)newttl) << 8 | IPPROTO_UDP);
@@ -722,6 +752,14 @@ int egress_v4_udp(struct __sk_buff *ctx) {
     if (rv < 0) {
 #if DEBUG
         bpf_trace_printk("EGRESS udp4 failed to store new ttl/proto\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+
+    rv = elf_v4_udp_beforesend(ctx);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS udp4 beforesend fail\n");
 #endif
         return TC_ACT_SHOT;
     }
@@ -883,6 +921,14 @@ int egress_v6_icmp(struct __sk_buff *ctx) {
         return TC_ACT_SHOT;
     }
 
+    rv = elf_v6_icmp_beforesend(ctx);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS icmp6 beforesend fail\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+
     // save info about outgoing probe into hash
     // hashed on: idx|sequence
     u64 sentkey = (u64)idx << 32 | (u64)sequence;
@@ -971,6 +1017,11 @@ int egress_v6_tcp(struct __sk_buff *ctx) {
     bpf_trace_printk("EGRESS tcp6 after clone emit %lu\n", sequence);
 #endif
 
+#ifdef NOTRUNCATE
+#ifdef DEBUG
+    bpf_trace_printk("EGRESS tcp6 not truncating\n");
+#endif
+#else
     struct _tcphdr newtcp;
     __builtin_memset(&newtcp, 0, sizeof(struct _tcphdr));
     newtcp.th_sport = bpf_htons(sport);
@@ -1020,11 +1071,20 @@ int egress_v6_tcp(struct __sk_buff *ctx) {
 #endif
         return TC_ACT_SHOT;
     }
+#endif // NOTRUNCATE
 
     rv = bpf_skb_store_bytes(ctx, NHOFFSET + IP6_TTL_OFF, &newttl, sizeof(newttl), 0);
     if (rv < 0) {
 #if DEBUG
         bpf_trace_printk("EGRESS tcp6 failed to store new ttl/proto\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+
+    rv = elf_v6_tcp_beforesend(ctx);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS tcp6 beforesend fail\n");
 #endif
         return TC_ACT_SHOT;
     }
@@ -1132,6 +1192,11 @@ int egress_v6_udp(struct __sk_buff *ctx) {
     bpf_trace_printk("EGRESS udp6 after clone emit %lu\n", sequence);
 #endif
 
+#ifdef NOTRUNCATE
+#ifdef DEBUG
+    bpf_trace_printk("EGRESS udp6 not truncating\n");
+#endif
+#else
     csum += bpf_htons(sport);
     csum += bpf_htons(dport);
     csum += bpf_htons(20); // udp hdr + payload
@@ -1197,11 +1262,20 @@ int egress_v6_udp(struct __sk_buff *ctx) {
 #endif
         return TC_ACT_SHOT;
     }
+#endif // NOTRUNCATE
 
     rv = bpf_skb_store_bytes(ctx, NHOFFSET + IP6_TTL_OFF, &newttl, sizeof(newttl), 0);
     if (rv < 0) {
 #if DEBUG
         bpf_trace_printk("EGRESS udp6 failed to store new ttl/proto\n");
+#endif
+        return TC_ACT_SHOT;
+    }
+
+    rv = elf_v6_udp_beforesend(ctx);
+    if (rv < 0) {
+#if DEBUG
+        bpf_trace_printk("EGRESS udp6 beforesend fail\n");
 #endif
         return TC_ACT_SHOT;
     }
@@ -1418,6 +1492,8 @@ int ingress_v4(struct xdp_md *ctx) {
     bpf_trace_printk("INGRESS ip4 seq %d proto %d from %d received\n", seq, iph->protocol, *val);
 #endif
 
+    elf_v4_afterrecv(ctx);
+
     // record received probe
     int zero = 0;
     int *resultsidx = resultscount.lookup(&zero);
@@ -1592,6 +1668,8 @@ int ingress_v6(struct xdp_md *ctx) {
 #if DEBUG
     bpf_trace_printk("INGRESS ip6 seq %d proto %d from %d received\n", seq, iph->protocol, *val);
 #endif
+
+    elf_v6_afterrecv(ctx);
 
     // record received probe
     int zero = 0;
