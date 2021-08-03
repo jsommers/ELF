@@ -9,6 +9,24 @@ be invoked (once dependencies are installed -- see `CLOUDLAB.md`) with
 
 See `CLOUDLAB.md` for installation instructions for an Ubuntu 18.04 or 20.04 host.  These instructions were originally designed for our cloudlab experiments, but work for any standard Ubuntu host.
 
+# Running
+
+A minimal example of running ELF and injecting probes within packet streams created with a binary named `speedtest` is as follows:
+
+```bash
+$ sudo python3 elfprobe.py -i eno2 -a speedtest 
+```
+
+With the above command line, ELF will instrument any ICMP/TCP/UDP flows initiated with `speedtest`.  Probe results will be stored, by default, in `elf.csv`.  See the `-f` option to change the output file name.  
+
+If there are specific destination addresses (v4 or v6) for which you want to instrument any flows, you can drop the `-a` option and list those names or addresses at the end of the `elfprobe.py` command line.
+
+ELF will dump quite a bit of information to the console while it runs.  You can redirect this chatter to a logfile with `-l` and turn off console chatter with `-q`.  To increase the chatter, add `-d` (debug) option.
+
+# Extending
+
+See `elfhooks.c` for entrypoints that can be overridden to include your own code.  In `elfhooks.c` you could also define your own BPF map(s) and use them in your hooks.  The egress hooks are invoked just before recording information about the outgoing probe, but _after_ any probe modifications (and after emitting the original application packet).  The ingress hooks are invoked _after_ inspecting packet contents and prior to recording information in ELF's BPF maps.  See `elfprobe.c` for additional context for where those hooks are invoked.
+
 # License
 
 Copyright 2021 Joel Sommers and Ramakrishnan Durairajan.  All rights reserved.
