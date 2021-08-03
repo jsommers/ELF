@@ -23,6 +23,42 @@ If there are specific destination addresses (v4 or v6) for which you want to ins
 
 ELF will dump quite a bit of information to the console while it runs.  You can redirect this chatter to a logfile with `-l` and turn off console chatter with `-q`.  To increase the chatter, add `-d` (debug) option.
 
+The full set of command line options are as follows (use `-h` to get the same):
+```
+$ sudo python3 elfprobe.py -h
+usage: elfprobe.py [-h] [-I {pass,drop}] [-l] [-f FILEBASE] [-d] [-p PROBEINT]
+                   [-P PID] [-a APP] [-r {g,global,h,perhop}] -i INTERFACE
+                   [-T] [-e {ethernet,ipinip,ip6inip}] [-q]
+                   [addresses [addresses ...]]
+
+positional arguments:
+  addresses             IP addresses of interest
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -I {pass,drop}, --ingress {pass,drop}
+                        Specify how ingress ICMP time exceeded messages should
+                        be handled: pass through to OS or drop in XDP
+  -l, --logfile         Turn on logfile output
+  -f FILEBASE, --filebase FILEBASE
+                        Configure base name for log and data output files
+  -d, --debug           Turn on debug logging
+  -p PROBEINT, --probeint PROBEINT
+                        Minimum probe interval (milliseconds)
+  -P PID, --pid PID     Add PID for process of interest
+  -a APP, --app APP     Add app name of interest
+  -r {g,global,h,perhop}, --ratetype {g,global,h,perhop}
+                        Probe rate type: global or per hop; default is per hop
+                        => longer path for per-hop type implies higher
+                        measurement probe rate
+  -i INTERFACE, --interface INTERFACE
+                        Interface/device to use
+  -T, --notrunc         Don't truncate probe payload
+  -e {ethernet,ipinip,ip6inip}, --encapsulation {ethernet,ipinip,ip6inip}
+                        How packets are encapsulated on the wire
+  -q, --quiet           Turn off logging to stdout (implies -l)
+```
+
 # Extending
 
 See `elfhooks.c` for entrypoints that can be overridden to include your own code.  In `elfhooks.c` you could also define your own BPF map(s) and use them in your hooks.  The egress hooks are invoked just before recording information about the outgoing probe, but _after_ any probe modifications (and after emitting the original application packet).  The ingress hooks are invoked _after_ inspecting packet contents and prior to recording information in ELF's BPF maps.  See `elfprobe.c` for additional context for where those hooks are invoked.
