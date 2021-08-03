@@ -95,7 +95,9 @@ def main(df, args, flowinfo, desthost, idx):
     else:
         hops = args.hop
 
-    if args.aggflows:
+    if args.aggbyresponder:
+        print(f"\nFlow {idx+1} responder {flowinfo.responder} hop {df['outttl'].unique()} dest {flowinfo.dest} records {len(df)}")
+    elif args.aggflows:
         print(f"\nFlow {idx+1} dest {flowinfo.dest} records {len(df)}")
     else:
         print(f"\nFlow {idx+1} dest {flowinfo.dest} sport {flowinfo.sport} dport {flowinfo.dport} protocol {flowinfo.protocol} records {len(df)}")
@@ -107,7 +109,7 @@ def main(df, args, flowinfo, desthost, idx):
             continue
 
         respip = responses.responder.value_counts().to_string()
-        print(f"Hop {h} total {len(onehop)} responses {len(responses)} fracresponse {round(len(responses)/len(onehop), 3)} responders {respip}")
+        print(f"Hop {h} total {len(onehop)} responses {len(responses)}")
         if len(responses) > 0:
             print("recvttl:", responses['recvttl'].value_counts().to_string())
             lats = responses['latency'].div(1000000)
@@ -146,6 +148,7 @@ if __name__ == '__main__':
             help='Data files')
     parser.add_argument('--plot', default=False, action='store_true', help='Whether to plot time series or not')
     parser.add_argument('--aggflows', default=False, action='store_true', help='Aggregate flows by destination in plots')
+    parser.add_argument('--aggbyresponder', default=False, action='store_true', help='Aggregate results by responder (intermediate router), not destination')
     parser.add_argument('--all', default=False, action='store_true', help='Print all data lines')
     parser.add_argument('--outname', '-o', default='tsplot', type=str, help='Output file name for timeseries plot')
     parser.add_argument('--cols', default=2, type=int, help='Number of columns in legend on plot')
@@ -156,17 +159,21 @@ if __name__ == '__main__':
     for f in args.inputfiles:
         firstwrite, hostmap = readlog(f)
         df = readdata(f, firstwrite, args.absx)
-        if args.aggflows:
+        if args.aggbyresponder:
+            flows = df[['responder']].dropna().drop_duplicates()
+            args.hop = None
+        elif args.aggflows:
             flows = df[['dest']].drop_duplicates()
         else:
             flows = df[['protocol','sport','dport','dest']].drop_duplicates()
 
         for i in range(len(flows)):
             fid = flows.iloc[i,:]
-            if args.aggflows:
+            if args.aggbyresponder:
+                flowdata = df[df['responder']==fid.responder]
+                fid.dest = ','.join(flowdata['dest'].drop_duplicates().to_list())
+            elif args.aggflows:
                 flowdata = df[df['dest']==fid.dest]
             else:
                 flowdata = df.query('dest==@fid.dest&protocol==@fid.protocol&sport==@fid.sport&dport==@fid.dport').copy()
-            if not len(flowdata):
-                continue
-            main(flowdata, args, fid, f"{fid.dest}: {','.join(hostmap.get(fid.dest))}", i)
+            main(flowdata, args, fid, f"{fid.dest}: {','.join(hostmap.get(fid.dest, []))}", i)
