@@ -28,11 +28,11 @@ inline int elf_v6_udp_beforesend(struct __sk_buff *ctx) {
     return 0;
 }
 
-inline void elf_v4_afterrecv(struct xdp_md *ctx)) {
+inline void elf_v4_afterrecv(struct xdp_md *ctx) {
     return;
 }
 
-inline void elf_v6_afterrecv(struct xdp_md *ctx)) {
+inline void elf_v6_afterrecv(struct xdp_md *ctx) {
     return;
 }
 
