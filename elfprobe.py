@@ -266,6 +266,9 @@ class RunState(object):
             cflags.append('-DDEBUG=1')
             bcc_debugflag = bcc.DEBUG_BPF_REGISTER_STATE | bcc.DEBUG_SOURCE | bcc.DEBUG_BPF | bcc.DEBUG_LLVM_IR 
 
+        if len(sys.path) > 0:
+            cflags.append('-I{}'.format(sys.path[0]))
+
         self._cflags = cflags
         logging.info("elf CFLAGS: {}".format(' '.join(cflags)))
 
