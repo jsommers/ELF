@@ -323,7 +323,11 @@ def _write_results(b, rcounts, csvout, config, dumpall=False):
             logging.debug("Got {} results on cpu {}".format(rc[cpu] - rcounts[cpu], cpu))
         while rcounts[cpu] < rc[cpu]:
             resultidx = rcounts[cpu] % MAX_RESULTS
-            res = results[resultidx][cpu]
+            try:
+                res = results[resultidx][cpu]
+            except IndexError:
+                print(f"Error retrieving result cpu{cpu} idx{resultidx} rcounts{rcounts[cpu]} rc{rc[cpu]}")
+                break
             rcounts[cpu] += 1
             xcount += 1
             if config.debug:
