@@ -214,20 +214,20 @@ class RunState(object):
         open pyroute2 for eventual installation of CLS_SCHED ebpf code
         '''
         ip = pyroute2.IPRoute()
-        ipdb = pyroute2.IPDB(nl=ip)
-        try:
-            idx = ipdb.interfaces[self._args.interface].index
-        except KeyError:
-            logging.error("Invalid device {}".format(self._args.interface))
-            sys.exit(-1)
+        with pyroute2.NDB() as ndb:
+            try:
+                idx = ndb.interfaces[self._args.interface]['index']
+            except KeyError:
+                logging.error("Invalid device {}".format(self._args.interface))
+                sys.exit(-1)
+
         logging.info("ifindex for {} is {}".format(self._args.interface, idx))
         self._idx = idx
         self._ip = ip
-        self._ipdb = ipdb
 
         try:
-            ip.tc('del', 'clsact', idx)
-        except pyroute2.netlink.exceptions.NetlinkError:
+             ip.tc('del', 'clsact', idx)
+        except:
             pass
 
     @property
@@ -237,7 +237,7 @@ class RunState(object):
     def _build_bpf_cflags(self):
         '''
         build CFLAGS for BCC based on command-line configuration.
-        NB: this must be done *after* open ipdb, since we get the 
+        NB: this must be done *after* open ndb, since we get the 
         interface index from pyroute2.
         '''
         cflags = ['-Wall', '-DPROBE_INT={}'.format(1000000 * self._args.probeint)] # 1 millisec default
@@ -276,7 +276,7 @@ class RunState(object):
     def open_ebpf(self):
         '''
         context manager that opens and configures BCC ebpf object, and closes/releases
-        ebpf + ipdb resources when done
+        ebpf + ndb resources when done
         '''
         self._open_pyroute2()
         self._build_bpf_cflags()
@@ -311,8 +311,6 @@ class RunState(object):
         finally:
             b.remove_xdp(self._args.interface)
             self._ip.tc('del', 'clsact', self._idx)
-            self._ipdb.release()
-
 
 def _write_results(b, rcounts, csvout, config, dumpall=False):
     xcount = 0
