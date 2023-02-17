@@ -161,7 +161,7 @@ def add_addresses_of_interest(b, config):
     destinfo = b['destinfo']
 
     if config.pid:
-        _add_by_address(trie, destinfo, process_addrs(config.pid), f"pid {config.pid}")
+        _add_by_address(trie, destinfo, _process_addrs(config.pid), f"pid {config.pid}")
     if config.app:
         addrset = set()
         pidset = _app_pids(config.app)
